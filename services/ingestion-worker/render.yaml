@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: openvitals-ingestion
+    runtime: docker
+    dockerfilePath: ./services/ingestion-worker/Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: BLOB_STORAGE_PROVIDER
+        value: vercel
+      - key: BLOB_READ_WRITE_TOKEN
+        sync: false
+      - key: AI_GATEWAY_API_KEY
+        sync: false
+      - key: AI_DEFAULT_MODEL
+        value: claude-sonnet-4-20250514
+      - key: RENDER_WEBHOOK_SECRET
+        generateValue: true
+      - key: PORT
+        value: "4000"

@@ -1,0 +1,34 @@
+{
+  "name": "@openvitals/ingestion-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/server.ts",
+    "build": "tsup",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/gateway": "^3.0.66",
+    "@openvitals/ai": "workspace:*",
+    "@openvitals/blob-storage": "workspace:*",
+    "@openvitals/common": "workspace:*",
+    "@openvitals/database": "workspace:*",
+    "@openvitals/events": "workspace:*",
+    "@openvitals/ingestion": "workspace:*",
+    "adm-zip": "^0.5.17",
+    "ai": "^6.0.116",
+    "drizzle-orm": "^0.45.1",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.5.207"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/express": "^5.0.6",
+    "@types/pdf-parse": "^1.1.5",
+    "tsup": "^8.4.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

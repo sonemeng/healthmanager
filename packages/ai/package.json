@@ -1,0 +1,23 @@
+{
+  "name": "@openvitals/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/gateway": "^3.0.0",
+    "@ai-sdk/openai": "^3.0.0",
+    "@openvitals/common": "workspace:*",
+    "ai": "^6.0.116"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
+}

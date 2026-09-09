@@ -1,0 +1,1 @@
+ALTER TABLE "metric_definitions" ADD COLUMN "display_precision" integer;
