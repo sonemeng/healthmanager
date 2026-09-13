@@ -32,7 +32,7 @@ The GitHub release provides a clean Windows x64 installer. It includes the full 
 
 Your local data is stored under `%APPDATA%\@openvitals\desktop\data` and is preserved across application upgrades. Do not publish this directory or the separately generated personal-data backup archive.
 
-See [the v0.1.3 release notes](docs/RELEASE_NOTES_v0.1.3.md) and [project summary](docs/PROJECT_SUMMARY.md).
+See [the latest release notes](docs/RELEASE_NOTES_v0.1.4.md) and [project summary](docs/PROJECT_SUMMARY.md).
 
 ## Features
 

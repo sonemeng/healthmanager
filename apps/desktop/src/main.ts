@@ -20,6 +20,39 @@ function createApplicationMenu() {
   const focusedWindow = () => BrowserWindow.getFocusedWindow();
   return Menu.buildFromTemplate([
     {
+      label: 'File',
+      submenu: [
+        { role: 'close', label: '关闭窗口' },
+        { type: 'separator' },
+        { role: 'quit', label: '退出 HealthManager++' },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'selectAll', label: '全选' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { label: '刷新', accelerator: 'Ctrl+R', click: () => focusedWindow()?.reload() },
+        { label: '强制刷新', accelerator: 'Ctrl+Shift+R', click: () => focusedWindow()?.webContents.reloadIgnoringCache() },
+        { type: 'separator' },
+        { role: 'resetZoom', label: '实际大小' },
+        { role: 'zoomIn', label: '放大' },
+        { role: 'zoomOut', label: '缩小' },
+        { type: 'separator' },
+        { label: '开发者工具', accelerator: 'Ctrl+Shift+I', click: () => focusedWindow()?.webContents.toggleDevTools() },
+      ],
+    },
+    {
       label: 'Window',
       submenu: [
         {
@@ -38,8 +71,13 @@ function createApplicationMenu() {
         { type: 'separator' },
         { role: 'minimize', label: '最小化' },
         { role: 'close', label: '关闭窗口' },
-        { type: 'separator' },
-        { label: '刷新', accelerator: 'Ctrl+R', click: () => focusedWindow()?.reload() },
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [
+        { label: '发布说明', click: () => void shell.openExternal('https://github.com/sonemeng/healthmanager/releases') },
+        { label: '项目主页', click: () => void shell.openExternal('https://github.com/sonemeng/healthmanager') },
       ],
     },
   ]);

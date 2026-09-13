@@ -1,6 +1,6 @@
 {
   "name": "@healthmanager/desktop",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Local-first family health records for Windows.",
   "author": "sonemeng",
   "private": true,
