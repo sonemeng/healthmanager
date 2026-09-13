@@ -1,6 +1,8 @@
 import { cn } from '@/lib/utils';
 import { Logo } from '@/assets/app/images/logo';
 import { ProvenancePill } from '@/components/health/provenance-pill';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export interface ChatMessageData {
   id: string;
@@ -63,7 +65,22 @@ export function MessageBlock({ message, onArtifactClick }: MessageBlockProps) {
               : 'rounded-[4px_16px_16px_16px] border border-neutral-200 bg-white text-neutral-800'
           )}
         >
-          {message.content}
+          {isUser ? message.content : (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                h1: ({ children }) => <h1 className="mb-2 text-lg font-semibold">{children}</h1>,
+                h2: ({ children }) => <h2 className="mb-2 mt-4 text-base font-semibold">{children}</h2>,
+                h3: ({ children }) => <h3 className="mb-1 mt-3 text-sm font-semibold">{children}</h3>,
+                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-5">{children}</ul>,
+                ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-5">{children}</ol>,
+                strong: ({ children }) => <strong className="font-semibold text-neutral-950">{children}</strong>,
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          )}
         </div>
 
         {/* Provenance sources */}

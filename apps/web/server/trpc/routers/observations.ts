@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { eq, and, ne } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { createRouter, protectedProcedure } from '../init';
 import { listObservations, getObservationTrend, getObservationWithProvenance, observations, importJobs } from '@openvitals/database';
 import { emitEvent } from '@openvitals/events';
@@ -51,6 +51,7 @@ export const observationsRouter = createRouter({
     .query(async ({ ctx, input }) => {
       const rows = await getObservationTrend(ctx.db, {
         userId: ctx.userId,
+        profileId: await getActiveProfileId(ctx.userId),
         metricCode: input.metricCode,
         dateFrom: input.dateFrom,
         dateTo: input.dateTo,
@@ -155,7 +156,7 @@ export const observationsRouter = createRouter({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Observation not found' });
       }
 
-      // If all observations for this import job are now confirmed/corrected, mark job completed
+      // Do not complete an import while an unmatched item still needs a user decision.
       const jobId = result[0]!.importJobId;
       if (jobId) {
         const pending = await ctx.db
@@ -165,7 +166,7 @@ export const observationsRouter = createRouter({
             and(
               eq(observations.importJobId, jobId),
               eq(observations.userId, ctx.userId),
-              eq(observations.status, 'extracted'),
+              inArray(observations.status, ['extracted', 'flagged']),
             ),
           )
           .limit(1);

@@ -37,6 +37,7 @@ export async function getObservationTrend(
   db: Database,
   params: {
     userId: string;
+    profileId?: string | null;
     metricCode: string;
     dateFrom?: Date;
     dateTo?: Date;
@@ -47,6 +48,7 @@ export async function getObservationTrend(
     eq(observations.userId, params.userId),
     eq(observations.metricCode, params.metricCode),
   ];
+  if (params.profileId) conditions.push(eq(observations.profileId, params.profileId));
   if (params.dateFrom) conditions.push(gte(observations.observedAt, params.dateFrom));
   if (params.dateTo) conditions.push(lte(observations.observedAt, params.dateTo));
 

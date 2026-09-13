@@ -38,3 +38,11 @@ apps/web/e2e/screenshots/
 # misc
 *.log
 *.tsbuildinfo
+
+# local health data and desktop build artifacts
+.local-blobs/
+desktop-runtime/
+apps/desktop/dist/
+apps/desktop/build/
+apps/desktop/release/
+apps/desktop/release-personal/

@@ -21,7 +21,8 @@ import {
   AlertCircle,
   Download,
 } from "lucide-react";
-import { downloadCsv } from "@/lib/export";
+import { downloadCsv, downloadText } from "@/lib/export";
+import { ModuleImports } from "@/components/health/module-imports";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
@@ -78,7 +79,9 @@ export default function ConditionsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline-subtle" size="sm" icon={<Download />} text="导出详细文档" onClick={() => downloadText("healthmanager-conditions-detail", ["# HealthManager 病史记录", "", `生成日期：${new Date().toISOString().slice(0, 10)}`, "", ...(conditions?.length ? conditions.map((c) => `## ${c.name}\n- 状态：${c.status ?? "未记录"}\n- 严重程度：${c.severity ?? "未记录"}\n- 起始日期：${c.onsetDate ?? "未记录"}\n- 解决日期：${c.resolutionDate ?? "未记录"}\n- 诊断医生：${c.diagnosedBy ?? "未记录"}\n- 备注：${c.notes ?? "无"}`) : ["暂无病史记录。"]), "", "本文件含个人健康信息，仅应分享给可信的家人、照护者或医疗专业人员。"].join("\n\n"), "text/markdown;charset=utf-8", "md")} />
           {conditions && conditions.length > 0 && (
+            <>
             <Button
               variant="outline-subtle"
               size="sm"
@@ -108,6 +111,7 @@ export default function ConditionsPage() {
                 );
               }}
             />
+            </>
           )}
           <Button
             icon={<Plus />}
@@ -221,6 +225,7 @@ export default function ConditionsPage() {
           )}
         </div>
       )}
+      <ModuleImports target="condition" />
     </div>
   );
 }

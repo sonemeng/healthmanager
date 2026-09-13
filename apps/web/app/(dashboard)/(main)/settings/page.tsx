@@ -22,6 +22,7 @@ export default function SettingsPage() {
   });
 
   const [timezone, setTimezone] = useState("UTC");
+  const [name, setName] = useState("");
   const [units, setUnits] = useState("metric");
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [biologicalSex, setBiologicalSex] = useState("");
@@ -37,6 +38,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (data) {
+      setName(data.name);
       setTimezone(data.timezone);
       setUnits(data.preferredUnits);
       setDateOfBirth(data.dateOfBirth ?? "");
@@ -48,6 +50,7 @@ export default function SettingsPage() {
 
   const handleSave = () => {
     updateMutation.mutate({
+      name,
       timezone,
       preferredUnits: units as "metric" | "imperial",
       ...(dateOfBirth && { dateOfBirth }),
@@ -117,9 +120,22 @@ export default function SettingsPage() {
             <h2 className="text-lg font-medium tracking-[-0.015em] text-neutral-900 font-display">
               人口学信息
             </h2>
-            <p className="mt-1 text-[13px] text-neutral-500 font-body">
-              用于按性别和年龄匹配检验结果的参考区间。
-            </p>
+           <p className="mt-1 text-[13px] text-neutral-500 font-body">
+             用于按性别和年龄匹配检验结果的参考区间。
+           </p>
+          </div>
+          <div>
+            <label htmlFor="name" className={labelClass}>
+              姓名
+            </label>
+            <input
+              id="name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className={inputClass}
+              placeholder="你的姓名"
+            />
           </div>
           <div>
             <label htmlFor="dateOfBirth" className={labelClass}>
@@ -177,6 +193,12 @@ export default function SettingsPage() {
 
         {/* AI 模型渠道 */}
         <AiChannelsCard />
+
+        <div className="card p-6 space-y-2">
+          <h2 className="text-lg font-medium tracking-[-0.015em] text-neutral-900 font-display">反馈邮件通知</h2>
+          <p className="text-[13px] leading-relaxed text-neutral-500 font-body">反馈内容始终保存在本机健康档案中。若需要同时向维护者发送邮件，请在启动桌面版的环境中配置 <code>RESEND_API_KEY</code>，并可选配置已验证发件人 <code>RESEND_FROM</code>。为避免邮件服务密钥被网页或导出文件读取，密钥不在此页面录入。</p>
+          <p className="text-[12px] text-neutral-400 font-mono">收件人：sonemeng@hotmail.com</p>
+        </div>
 
         {/* Optimal Ranges */}
         <div className="card p-6 space-y-4">

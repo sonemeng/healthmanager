@@ -75,6 +75,14 @@ export default function ImportJobDetailPage({
   const reprocessMutation = trpc.importJobs.reprocess.useMutation({
     onSuccess: () => utils.importJobs.getDetail.invalidate({ id }),
   });
+  const resolveCandidateMutation = trpc.importJobs.resolveCandidate.useMutation({
+    onSuccess: () => {
+      utils.importJobs.getDetail.invalidate({ id });
+      utils.medications.list.invalidate();
+      utils.conditions.list.invalidate();
+      utils.encounters.list.invalidate();
+    },
+  });
 
   const grouped = useMemo(() => {
     if (!detailObservations)
@@ -129,6 +137,7 @@ export default function ImportJobDetailPage({
   }
 
   const { job, observations } = data;
+  const candidates = getPendingCandidates(job.errorDetailJson);
   const jobStatus =
     IMPORT_JOB_STATUS_MAP[job.status] ?? IMPORT_JOB_STATUS_MAP.completed!;
 
@@ -210,6 +219,18 @@ export default function ImportJobDetailPage({
         </div>
       )}
 
+      {candidates.length > 0 && (
+        <section className="mt-8">
+          <div className="mb-2.5 flex items-center gap-2.5">
+            <h2 className="text-sm font-semibold text-neutral-700 font-body">待确认健康记录</h2>
+            <span className="text-[11px] text-neutral-400 font-mono">仅在确认后写入档案</span>
+          </div>
+          <div className="card divide-y divide-neutral-100">
+            {candidates.map((candidate) => <PendingCandidateRow key={candidate.id} candidate={candidate} isPending={resolveCandidateMutation.isPending} onResolve={(action, updates) => resolveCandidateMutation.mutate({ id, candidateId: candidate.id, action, updates })} />)}
+          </div>
+        </section>
+      )}
+
       {/* Observations by category */}
       <div className="mt-8 space-y-6">
         {observations.length === 0 ? (
@@ -241,6 +262,33 @@ export default function ImportJobDetailPage({
       </div>
     </div>
   );
+}
+
+type PendingCandidate = { id: string; kind: "medication" | "condition" | "encounter"; title: string; detail: string; fields: Record<string, string> };
+
+function getPendingCandidates(value: unknown): PendingCandidate[] {
+  if (!value || typeof value !== "object") return [];
+  const candidates = (value as Record<string, unknown>).candidates;
+  if (!Array.isArray(candidates)) return [];
+  return candidates.reduce<PendingCandidate[]>((result, candidate: unknown) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const item = candidate as Record<string, unknown>;
+    if (item.status !== "pending" || typeof item.id !== "string") return result;
+    if (item.kind === "medication" && typeof item.name === "string") result.push({ id: item.id, kind: "medication", title: `用药：${item.name}`, detail: [item.dosage, item.frequency, item.indication].filter((part): part is string => typeof part === "string" && Boolean(part)).join(" · ") || "未提供更多信息", fields: { name: item.name, dosage: typeof item.dosage === "string" ? item.dosage : "", frequency: typeof item.frequency === "string" ? item.frequency : "", indication: typeof item.indication === "string" ? item.indication : "", startDate: typeof item.startDate === "string" ? item.startDate : "" } });
+    if (item.kind === "condition" && typeof item.name === "string") result.push({ id: item.id, kind: "condition", title: `病史：${item.name}`, detail: typeof item.notes === "string" ? item.notes : "待确认病史记录", fields: { name: item.name, onsetDate: typeof item.onsetDate === "string" ? item.onsetDate : "", notes: typeof item.notes === "string" ? item.notes : "" } });
+    if (item.kind === "encounter" && typeof item.encounterDate === "string") result.push({ id: item.id, kind: "encounter", title: `就诊：${item.encounterDate}`, detail: [item.provider, item.facility, item.chiefComplaint].filter((part): part is string => typeof part === "string" && Boolean(part)).join(" · ") || "待确认就诊记录", fields: { encounterDate: item.encounterDate, provider: typeof item.provider === "string" ? item.provider : "", facility: typeof item.facility === "string" ? item.facility : "", chiefComplaint: typeof item.chiefComplaint === "string" ? item.chiefComplaint : "", summary: typeof item.summary === "string" ? item.summary : "" } });
+    return result;
+  }, []);
+}
+
+function PendingCandidateRow({ candidate, isPending, onResolve }: { candidate: PendingCandidate; isPending: boolean; onResolve: (action: "confirm" | "reject", updates: Record<string, string>) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [fields, setFields] = useState(candidate.fields);
+  return <div className="px-5 py-3.5">
+    <div className="flex items-start justify-between gap-4"><div><p className="text-[13px] font-medium text-neutral-900">{candidate.title}</p><p className="mt-0.5 text-[11px] text-neutral-500">{candidate.detail}</p></div><button onClick={() => setEditing(!editing)} className="text-[11px] text-accent-600 hover:text-accent-700">{editing ? "收起编辑" : "修改后确认"}</button></div>
+    {editing && <div className="mt-3 grid gap-2 sm:grid-cols-2">{Object.entries(fields).map(([key, value]) => <label key={key} className="text-[11px] text-neutral-500">{key}<input type={key.toLowerCase().includes("date") ? "date" : "text"} value={value} onChange={(event) => setFields((current) => ({ ...current, [key]: event.target.value }))} className="mt-1 w-full rounded border border-neutral-200 px-2 py-1.5 text-[12px] text-neutral-900" /></label>)}</div>}
+    <div className="mt-3 flex justify-end gap-2"><button onClick={() => onResolve("reject", fields)} disabled={isPending} className="rounded-md border border-neutral-200 px-2.5 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-50">忽略</button><button onClick={() => onResolve("confirm", fields)} disabled={isPending} className="rounded-md bg-accent-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-accent-700 disabled:opacity-50">确认写入</button></div>
+  </div>;
 }
 
 function SummaryCard({
@@ -321,6 +369,7 @@ function CategoryGroup({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [editUnit, setEditUnit] = useState("");
+  const [editMetricCode, setEditMetricCode] = useState("");
   const [editNote, setEditNote] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
@@ -328,6 +377,7 @@ function CategoryGroup({
     setEditingId(obs.id);
     setEditValue(obs.valueNumeric != null ? String(obs.valueNumeric) : "");
     setEditUnit(obs.unit ?? "");
+    setEditMetricCode(obs.metricCode === "unmatched" ? "" : obs.metricCode);
     setEditNote("");
   };
 
@@ -343,6 +393,7 @@ function CategoryGroup({
         id: editingId,
         ...(editValue !== "" && { valueNumeric: Number(editValue) }),
         ...(editUnit !== "" && { unit: editUnit }),
+        ...(editMetricCode !== "" && { metricCode: editMetricCode }),
         ...(editNote !== "" && { correctionNote: editNote }),
       });
       setEditingId(null);
@@ -507,13 +558,13 @@ function CategoryGroup({
                       </button>
                     </>
                   ) : isFlagged ? (
-                    // 待手动匹配：仅文字提示，不提供确认/删除
-                    <span
-                      className="text-[11px] text-amber-600 font-mono"
+                    <button
+                      onClick={() => startEditing(obs)}
+                      className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-100 font-mono"
                       title={obs.correctionNote ?? undefined}
                     >
-                      待手动匹配
-                    </span>
+                      手动匹配
+                    </button>
                   ) : null}
                 </div>
               </div>
@@ -522,6 +573,23 @@ function CategoryGroup({
               {isEditing && (
                 <div className="border-b border-neutral-100 bg-neutral-50/60 px-5 py-3">
                   <div className="flex flex-wrap items-end gap-3">
+                    {obs.status === "flagged" && (
+                      <label className="flex min-w-[220px] flex-1 flex-col gap-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-neutral-400 font-mono">
+                          匹配为标准指标
+                        </span>
+                        <select
+                          value={editMetricCode}
+                          onChange={(e) => setEditMetricCode(e.target.value)}
+                          className={inputClass}
+                        >
+                          <option value="">请选择指标</option>
+                          {Array.from(metricNameMap ?? new Map()).map(([metricCode, name]) => (
+                            <option key={metricCode} value={metricCode}>{name} ({metricCode})</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     <label className="flex flex-col gap-1">
                       <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-neutral-400 font-mono">
                         数值
@@ -565,7 +633,7 @@ function CategoryGroup({
                       </button>
                       <button
                         onClick={saveCorrection}
-                        disabled={isSaving}
+                        disabled={isSaving || (obs.status === "flagged" && !editMetricCode)}
                         className="rounded-lg bg-accent-600 px-4 py-2 text-[13px] font-medium text-white shadow-sm transition-colors hover:bg-accent-700 disabled:opacity-50"
                       >
                         保存

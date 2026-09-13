@@ -7,6 +7,9 @@ import { signUp } from "@/lib/auth/client";
 import { LogoWordmark } from "@/assets/app/images/logo";
 import { toast } from "sonner";
 import { Button } from "@/components/button";
+
+const NAME_PATTERN = /^[\p{L}][\p{L}\p{M}\s.'-]{0,49}$/u;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export default function RegisterPage() {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -17,14 +20,24 @@ export default function RegisterPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (password.length < 8) {
-      toast.error("密码至少需要 8 个字符");
+    const normalizedName = name.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!NAME_PATTERN.test(normalizedName)) {
+      toast.error("姓名仅可包含文字、空格、英文句点、撇号或连字符");
+      return;
+    }
+    if (!EMAIL_PATTERN.test(normalizedEmail) || /[\x00-\x1F\x7F]/.test(normalizedEmail)) {
+      toast.error("请输入合法的邮箱地址");
+      return;
+    }
+    if (password.length < 8 || password.length > 128 || /[\x00-\x1F\x7F]/.test(password)) {
+      toast.error("密码须为 8 至 128 个字符，且不能包含控制字符");
       return;
     }
 
     setLoading(true);
     try {
-      const { error } = await signUp.email({ name, email, password });
+      const { error } = await signUp.email({ name: normalizedName, email: normalizedEmail, password });
       if (error) {
         toast.error(error.message ?? "账号创建失败");
         return;
@@ -62,6 +75,9 @@ export default function RegisterPage() {
             id="name"
             type="text"
             required
+            maxLength={50}
+            pattern="[A-Za-z\u00C0-\uFFFF][A-Za-z\u00C0-\uFFFF .'-]*"
+            autoComplete="name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="mt-1.5 block w-full rounded-lg border border-neutral-200 bg-white px-3.5 py-2.5 text-[14px] text-neutral-900 placeholder:text-neutral-400 transition-all focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100"
@@ -80,6 +96,7 @@ export default function RegisterPage() {
             id="email"
             type="email"
             required
+            autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="mt-1.5 block w-full rounded-lg border border-neutral-200 bg-white px-3.5 py-2.5 text-[14px] text-neutral-900 placeholder:text-neutral-400 transition-all focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100"
@@ -99,6 +116,8 @@ export default function RegisterPage() {
             type="password"
             required
             minLength={8}
+            maxLength={128}
+            autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="mt-1.5 block w-full rounded-lg border border-neutral-200 bg-white px-3.5 py-2.5 text-[14px] text-neutral-900 placeholder:text-neutral-400 transition-all focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100"

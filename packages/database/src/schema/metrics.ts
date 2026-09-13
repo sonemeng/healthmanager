@@ -11,6 +11,7 @@ import {
   timestamp,
 } from "drizzle-orm/pg-core";
 import { users } from "./users";
+import { profiles } from "./profiles";
 
 // ── Metric Definitions ─────────────────────────────────────────────────────────
 
@@ -96,6 +97,9 @@ export const userOptimalRanges = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
     metricCode: varchar("metric_code", { length: 50 })
       .notNull()
       .references(() => metricDefinitions.id),
@@ -105,8 +109,9 @@ export const userOptimalRanges = pgTable(
     updatedAt: timestamp("updated_at").defaultNow(),
   },
   (table) => [
-    unique("user_optimal_ranges_user_metric_uniq").on(
+    unique("user_optimal_ranges_user_profile_metric_uniq").on(
       table.userId,
+      table.profileId,
       table.metricCode,
     ),
   ],

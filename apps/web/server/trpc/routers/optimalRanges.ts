@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import { createRouter, protectedProcedure } from "../init";
-import { optimalRanges, userOptimalRanges, users } from "@openvitals/database";
+import { optimalRanges, profiles, userOptimalRanges, users } from "@openvitals/database";
 import { computeAge } from "@/lib/demographics";
+import { getActiveProfileId } from "../active-profile";
 
 interface DemographicRange {
   metricCode: string;
@@ -71,19 +72,20 @@ export const optimalRangesRouter = createRouter({
   forUser: protectedProcedure
     .input(z.object({ metricCode: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      // Get user demographics
-      const [user] = await ctx.db
+      const profileId = await getActiveProfileId(ctx.userId);
+      if (!profileId) return {};
+      const [profile] = await ctx.db
         .select({
-          dateOfBirth: users.dateOfBirth,
-          biologicalSex: users.biologicalSex,
+          birthDate: profiles.birthDate,
+          gender: profiles.gender,
         })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
+        .from(profiles)
+        .where(and(eq(profiles.id, profileId), eq(profiles.userId, ctx.userId)))
         .limit(1);
 
       const demographics: UserDemographics = {
-        sex: user?.biologicalSex ?? null,
-        ageInYears: computeAge(user?.dateOfBirth ?? null),
+        sex: profile?.gender ?? null,
+        ageInYears: computeAge(profile?.birthDate ?? null),
       };
 
       // Get user overrides
@@ -94,13 +96,14 @@ export const optimalRangesRouter = createRouter({
             .where(
               and(
                 eq(userOptimalRanges.userId, ctx.userId),
+                eq(userOptimalRanges.profileId, profileId),
                 eq(userOptimalRanges.metricCode, input.metricCode),
               ),
             )
         : await ctx.db
             .select()
             .from(userOptimalRanges)
-            .where(eq(userOptimalRanges.userId, ctx.userId));
+            .where(and(eq(userOptimalRanges.userId, ctx.userId), eq(userOptimalRanges.profileId, profileId)));
 
       const overrideMap = new Map(overrides.map((o) => [o.metricCode, o]));
 
@@ -173,10 +176,12 @@ export const optimalRangesRouter = createRouter({
     }),
 
   getUserOverrides: protectedProcedure.query(async ({ ctx }) => {
+    const profileId = await getActiveProfileId(ctx.userId);
+    if (!profileId) return [];
     return ctx.db
       .select()
       .from(userOptimalRanges)
-      .where(eq(userOptimalRanges.userId, ctx.userId));
+      .where(and(eq(userOptimalRanges.userId, ctx.userId), eq(userOptimalRanges.profileId, profileId)));
   }),
 
   setOverride: protectedProcedure
@@ -188,16 +193,19 @@ export const optimalRangesRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+      if (!profileId) throw new Error("健康档案不存在");
       await ctx.db
         .insert(userOptimalRanges)
         .values({
           userId: ctx.userId,
+          profileId,
           metricCode: input.metricCode,
           rangeLow: input.rangeLow,
           rangeHigh: input.rangeHigh,
         })
         .onConflictDoUpdate({
-          target: [userOptimalRanges.userId, userOptimalRanges.metricCode],
+          target: [userOptimalRanges.userId, userOptimalRanges.profileId, userOptimalRanges.metricCode],
           set: {
             rangeLow: input.rangeLow,
             rangeHigh: input.rangeHigh,
@@ -210,11 +218,14 @@ export const optimalRangesRouter = createRouter({
   deleteOverride: protectedProcedure
     .input(z.object({ metricCode: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+      if (!profileId) throw new Error("健康档案不存在");
       await ctx.db
         .delete(userOptimalRanges)
         .where(
           and(
             eq(userOptimalRanges.userId, ctx.userId),
+            eq(userOptimalRanges.profileId, profileId),
             eq(userOptimalRanges.metricCode, input.metricCode),
           ),
         );

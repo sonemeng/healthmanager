@@ -13,6 +13,7 @@ import {
   FileText,
   GitCompareArrows,
   HeartPulse,
+  UsersRound,
   Stethoscope,
   type LucideIcon,
 } from "lucide-react";
@@ -36,12 +37,13 @@ export const navigation: NavItem[] = [
 
 // Secondary nav — less frequently used
 export const secondaryNav: NavItem[] = [
+  { name: "家庭概览", href: "/family", icon: UsersRound },
   { name: "生物标志物", href: "/biomarkers", icon: ListChecks },
   { name: "检查套餐", href: "/testing", icon: Microscope },
   { name: "健康报告", href: "/reports", icon: FileText },
   { name: "就诊记录", href: "/encounters", icon: Stethoscope },
   { name: "关联分析", href: "/correlations", icon: GitCompareArrows },
-  // { name: 'Sharing', href: '/sharing', icon: Share2 },
+  { name: "数据分享", href: "/sharing", icon: Share2 },
   { name: "AI 问答", href: "/ai", icon: MessageSquare },
 ];
 

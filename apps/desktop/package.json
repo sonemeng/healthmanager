@@ -1,0 +1,65 @@
+{
+  "name": "@healthmanager/desktop",
+  "version": "0.1.3",
+  "description": "Local-first family health records for Windows.",
+  "author": "sonemeng",
+  "private": true,
+  "main": "build/main.js",
+  "scripts": {
+    "dev": "pnpm build && electron .",
+    "build": "tsup src/main.ts src/preload.ts --format cjs --target node22 --out-dir build --clean --external electron",
+    "typecheck": "tsc --noEmit",
+    "prepare-runtime": "tsx scripts/prepare-runtime.ts",
+    "dist": "pnpm prepare-runtime && pnpm build && electron-builder --win nsis --x64",
+    "backup-personal-data": "tsx scripts/backup-personal-data.ts"
+  },
+  "build": {
+    "appId": "com.sonemeng.healthmanager",
+    "productName": "HealthManager++",
+    "directories": {
+      "output": "release"
+    },
+    "asar": true,
+    "files": [
+      "build/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../desktop-runtime/app",
+        "to": "app",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../../desktop-runtime/postgres",
+        "to": "postgres",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "HealthManager++-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "electron": "^40.4.2",
+    "electron-builder": "^26.8.1",
+    "tsup": "^8.4.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

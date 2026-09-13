@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createRouter, protectedProcedure } from "../init";
 import {
   createImportJob,
@@ -13,6 +13,11 @@ import {
   findImportJobByContentHash,
   resetImportJob,
   importJobs,
+  medications,
+  conditions,
+  encounters,
+  sourceArtifacts,
+  profiles,
   type Database,
 } from "@openvitals/database";
 import { getActiveProfileId } from "../active-profile";
@@ -23,6 +28,43 @@ type WorkerTriggerParams = {
   userId: string;
   source: string;
 };
+
+const candidateSchema = z.discriminatedUnion("kind", [
+  z.object({
+    id: z.string(),
+    kind: z.literal("medication"),
+    status: z.enum(["pending", "confirmed", "rejected"]),
+    name: z.string(),
+    dosage: z.string().optional(),
+    frequency: z.string().optional(),
+    indication: z.string().optional(),
+    startDate: z.string().optional(),
+  }),
+  z.object({
+    id: z.string(),
+    kind: z.literal("condition"),
+    status: z.enum(["pending", "confirmed", "rejected"]),
+    name: z.string(),
+    severity: z.enum(["mild", "moderate", "severe"]).optional(),
+    onsetDate: z.string().optional(),
+    notes: z.string().optional(),
+  }),
+  z.object({
+    id: z.string(),
+    kind: z.literal("encounter"),
+    status: z.enum(["pending", "confirmed", "rejected"]),
+    type: z.enum(["checkup", "specialist", "urgent_care", "emergency", "telehealth", "lab_visit", "imaging", "dental", "therapy", "other"]),
+    encounterDate: z.string(),
+    provider: z.string().optional(),
+    facility: z.string().optional(),
+    chiefComplaint: z.string().optional(),
+    summary: z.string().optional(),
+  }),
+]);
+
+const candidateDetailsSchema = z.object({
+  candidates: z.array(candidateSchema),
+}).passthrough();
 
 async function triggerWorker(db: Database, params: WorkerTriggerParams) {
   const workerUrl = process.env.RENDER_WORKER_URL ?? "http://localhost:4000";
@@ -79,9 +121,31 @@ export const importJobsRouter = createRouter({
         fileSize: z.number(),
         dataSourceId: z.string().uuid().optional(),
         profileId: z.string().uuid().optional(),
+        documentType: z.enum(["encounter_note", "imaging_report", "dental_record", "immunization_record"]).optional(),
+        importTarget: z.enum(["medication", "condition", "encounter"]).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const profileId = input.profileId ?? await getActiveProfileId(ctx.userId);
+      if (!profileId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "请先选择健康档案后再导入报告",
+        });
+      }
+
+      const [profile] = await ctx.db
+        .select({ id: profiles.id })
+        .from(profiles)
+        .where(and(eq(profiles.id, profileId), eq(profiles.userId, ctx.userId)))
+        .limit(1);
+      if (!profile) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "不能向不属于当前账号的健康档案导入报告",
+        });
+      }
+
       // Check for duplicate document
       const existing = await findImportJobByContentHash(ctx.db, {
         userId: ctx.userId,
@@ -99,7 +163,7 @@ export const importJobsRouter = createRouter({
 
       const result = await createImportJob(ctx.db, {
         userId: ctx.userId,
-        profileId: input.profileId ?? null,
+        profileId,
         fileName: input.fileName,
         mimeType: input.mimeType,
         blobPath: input.blobPath,
@@ -107,6 +171,16 @@ export const importJobsRouter = createRouter({
         fileSize: input.fileSize,
         dataSourceId: input.dataSourceId,
       });
+
+      // Module-specific imports intentionally bypass generic classification.
+      // This keeps a prescription, medical history, or visit note in its own review flow.
+      if (input.documentType) {
+        await ctx.db.update(importJobs).set({
+          classifiedType: input.documentType,
+          classificationConfidence: 1,
+          errorDetailJson: input.importTarget ? { importTarget: input.importTarget } : undefined,
+        }).where(eq(importJobs.id, result.importJobId));
+      }
 
       await triggerWorker(ctx.db, {
         importJobId: result.importJobId,
@@ -163,6 +237,31 @@ export const importJobsRouter = createRouter({
       return { items };
     }),
 
+  moduleRecent: protectedProcedure
+    .input(z.object({ target: z.enum(["medication", "condition", "encounter"]) }))
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db
+        .select({
+          id: importJobs.id,
+          status: importJobs.status,
+          extractionCount: importJobs.extractionCount,
+          needsReview: importJobs.needsReview,
+          errorMessage: importJobs.errorMessage,
+          errorDetailJson: importJobs.errorDetailJson,
+          createdAt: importJobs.createdAt,
+          fileName: sourceArtifacts.fileName,
+        })
+        .from(importJobs)
+        .innerJoin(sourceArtifacts, eq(importJobs.sourceArtifactId, sourceArtifacts.id))
+        .where(eq(importJobs.userId, ctx.userId))
+        .orderBy(importJobs.createdAt)
+        .limit(30);
+
+      return rows
+        .filter((row) => (row.errorDetailJson as Record<string, unknown> | null)?.importTarget === input.target)
+        .slice(0, 5);
+    }),
+
   getDetail: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
@@ -181,6 +280,73 @@ export const importJobsRouter = createRouter({
         userId: ctx.userId,
       });
       return { job, observations };
+    }),
+
+  resolveCandidate: protectedProcedure
+    .input(z.object({
+      id: z.string().uuid(),
+      candidateId: z.string(),
+      action: z.enum(["confirm", "reject"]),
+      updates: z.record(z.string(), z.string()).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const [job] = await ctx.db
+        .select()
+        .from(importJobs)
+        .where(and(eq(importJobs.id, input.id), eq(importJobs.userId, ctx.userId)))
+        .limit(1);
+      if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "Import job not found" });
+
+      const parsed = candidateDetailsSchema.safeParse(job.errorDetailJson);
+      if (!parsed.success) throw new TRPCError({ code: "NOT_FOUND", message: "Candidate record not found" });
+      const candidates = parsed.data.candidates;
+      const index = candidates.findIndex((candidate) => candidate.id === input.candidateId);
+      const candidate = candidates[index];
+      if (!candidate || candidate.status !== "pending") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Candidate record is no longer pending" });
+      }
+
+      const editable = input.updates ?? {};
+      const updatedCandidate = candidate.kind === "medication"
+        ? { ...candidate, name: editable.name?.trim() || candidate.name, dosage: editable.dosage?.trim() || undefined, frequency: editable.frequency?.trim() || undefined, indication: editable.indication?.trim() || undefined, startDate: editable.startDate?.trim() || undefined }
+        : candidate.kind === "condition"
+          ? { ...candidate, name: editable.name?.trim() || candidate.name, onsetDate: editable.onsetDate?.trim() || undefined, notes: editable.notes?.trim() || undefined }
+          : { ...candidate, encounterDate: editable.encounterDate?.trim() || candidate.encounterDate, provider: editable.provider?.trim() || undefined, facility: editable.facility?.trim() || undefined, chiefComplaint: editable.chiefComplaint?.trim() || undefined, summary: editable.summary?.trim() || undefined };
+
+      const profileId = (await getActiveProfileId(ctx.userId)) ?? null;
+      if (input.action === "confirm") {
+        if (updatedCandidate.kind === "medication") {
+          await ctx.db.insert(medications).values({
+            userId: ctx.userId, profileId, name: updatedCandidate.name, dosage: updatedCandidate.dosage,
+            frequency: updatedCandidate.frequency, indication: updatedCandidate.indication, startDate: updatedCandidate.startDate,
+            status: "extracted", sourceArtifactId: job.sourceArtifactId, importJobId: job.id,
+          });
+        } else if (updatedCandidate.kind === "condition") {
+          await ctx.db.insert(conditions).values({
+            userId: ctx.userId, profileId, name: updatedCandidate.name, severity: updatedCandidate.severity,
+            onsetDate: updatedCandidate.onsetDate, notes: updatedCandidate.notes,
+            sourceArtifactId: job.sourceArtifactId, importJobId: job.id,
+          });
+        } else {
+          await ctx.db.insert(encounters).values({
+            userId: ctx.userId, profileId, type: updatedCandidate.type, encounterDate: updatedCandidate.encounterDate,
+            provider: updatedCandidate.provider, facility: updatedCandidate.facility, chiefComplaint: updatedCandidate.chiefComplaint,
+            summary: updatedCandidate.summary, sourceArtifactId: job.sourceArtifactId, importJobId: job.id,
+          });
+        }
+      }
+
+      candidates[index] = { ...updatedCandidate, status: input.action === "confirm" ? "confirmed" : "rejected" } as typeof candidate;
+      const hasPending = candidates.some((item) => item.status === "pending");
+      await ctx.db.update(importJobs).set({
+        errorDetailJson: { ...parsed.data, candidates },
+        needsReview: hasPending,
+        status: hasPending ? "review_needed" : "completed",
+        completedAt: hasPending ? null : new Date(),
+        updatedAt: new Date(),
+      }).where(eq(importJobs.id, job.id));
+
+      return { success: true };
     }),
 
   delete: protectedProcedure

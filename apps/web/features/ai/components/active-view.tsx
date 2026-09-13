@@ -1,65 +1,34 @@
 'use client';
 
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
-import { MessageThread } from './message-thread';
+import Link from 'next/link';
+import { Bot, BrainCircuit, ChevronDown, Download, FileText, History, Menu, MessageSquarePlus, PanelLeftClose, PanelLeftOpen, Pill, Sparkles, Stethoscope } from 'lucide-react';
+import { useState } from 'react';
 import { ChatInput } from './chat-input';
 import { InsightPanel, type HealthInsight } from './insight-panel';
+import { MessageThread } from './message-thread';
 import type { ChatMessageData } from './message-block';
 
 interface ActiveViewProps {
-  messages: ChatMessageData[];
-  input: string;
-  onInputChange: (value: string) => void;
-  onSubmit: () => void;
-  onStop?: () => void;
-  isStreaming: boolean;
-  panelOpen: boolean;
-  activeInsight: HealthInsight | null;
-  onPanelClose: () => void;
-  onArtifactClick: (id: string) => void;
+  messages: ChatMessageData[]; input: string; onInputChange: (value: string) => void; onSubmit: () => void; onStop?: () => void; isStreaming: boolean;
+  panelOpen: boolean; activeInsight: HealthInsight | null; onPanelClose: () => void; onArtifactClick: (id: string) => void; onExport: () => void; onClear: () => void;
+  conversations: Array<{ id: string; title: string; createdAt: Date | string | null }>; activeConversationId?: string; onSelectConversation: (id: string) => void; onNewConversation: () => void;
+  hasMessages: boolean; model: string; modelOptions: string[]; activeChannelName?: string; profileName?: string; isOwnerProfile?: boolean; reasoningEffort: 'low' | 'medium' | 'high';
+  onModelChange: (model: string) => void; onReasoningEffortChange: (effort: 'low' | 'medium' | 'high') => void; onSuggestionClick: (suggestion: string) => void;
 }
 
-export function ActiveView({
-  messages,
-  input,
-  onInputChange,
-  onSubmit,
-  onStop,
-  isStreaming,
-  panelOpen,
-  activeInsight,
-  onPanelClose,
-  onArtifactClick,
-}: ActiveViewProps) {
-  return (
-    <ResizablePanelGroup orientation="horizontal" className="h-full">
-      {/* Left panel: Messages + Input */}
-      <ResizablePanel defaultSize={panelOpen ? 45 : 100} minSize={30}>
-        <div className="flex h-full flex-col bg-white">
-          <MessageThread messages={messages} onArtifactClick={onArtifactClick} />
-          <ChatInput
-            value={input}
-            onChange={onInputChange}
-            onSubmit={onSubmit}
-            onStop={onStop}
-            isStreaming={isStreaming}
-          />
-        </div>
-      </ResizablePanel>
+const suggestions = ['总结我最近的检验结果', '我应该和医生讨论哪些趋势？', '我的药物可能如何影响检验结果？', '生成一份可以分享给医生的总结'];
 
-      {panelOpen && (
-        <>
-          <ResizableHandle
-            withHandle
-            className="w-px bg-neutral-200 transition-colors hover:bg-accent-300 data-[resize-handle-active]:bg-accent-500"
-          />
-          <ResizablePanel defaultSize={55} minSize={30} collapsible>
-            <div className="h-full bg-neutral-50">
-              <InsightPanel insight={activeInsight} onClose={onPanelClose} />
-            </div>
-          </ResizablePanel>
-        </>
-      )}
-    </ResizablePanelGroup>
-  );
+export function ActiveView(props: ActiveViewProps) {
+  const { messages, input, onInputChange, onSubmit, onStop, isStreaming, panelOpen, activeInsight, onPanelClose, onArtifactClick, onExport, conversations, activeConversationId, onSelectConversation, onNewConversation, hasMessages, model, modelOptions, activeChannelName, profileName, isOwnerProfile, reasoningEffort, onModelChange, onReasoningEffortChange, onSuggestionClick } = props;
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  return <div className="flex h-[calc(100vh-57px)] min-h-[620px] bg-white">
+    <aside className={`${sidebarOpen ? 'w-72' : 'w-14'} hidden shrink-0 flex-col border-r border-neutral-200 bg-neutral-50 transition-[width] duration-200 lg:flex`}>
+      <div className={sidebarOpen ? "flex items-center justify-between p-3" : "flex flex-col items-center gap-2 py-3"}>{sidebarOpen ? <><button type="button" onClick={onNewConversation} title="新建对话" className="flex min-w-0 flex-1 items-center gap-2 rounded-xl bg-neutral-900 px-3 py-2.5 text-[13px] font-medium text-white transition hover:bg-neutral-700"><MessageSquarePlus className="size-4 shrink-0" />新建对话</button><button type="button" onClick={() => setSidebarOpen(false)} title="收起侧栏" className="ml-2 rounded-lg p-2 text-neutral-500 hover:bg-white hover:text-neutral-900"><PanelLeftClose className="size-4" /></button></> : <><button type="button" onClick={onNewConversation} title="新建对话" className="flex size-9 items-center justify-center rounded-lg bg-neutral-900 text-white hover:bg-neutral-700"><MessageSquarePlus className="size-4" /></button><button type="button" onClick={() => setSidebarOpen(true)} title="展开侧栏" className="flex size-9 items-center justify-center rounded-lg text-neutral-600 hover:bg-white hover:text-neutral-900"><PanelLeftOpen className="size-4" /></button></>}</div>
+      {sidebarOpen ? <><div className="px-3 pb-3"><p className="px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-neutral-400">健康工作区</p><div className="space-y-1"><Link href="/reports" className="flex items-center gap-2 rounded-lg px-2 py-2 text-[12px] text-neutral-600 hover:bg-white hover:text-neutral-900"><Sparkles className="size-3.5 text-accent-600" />综合健康分析</Link><Link href="/labs" className="flex items-center gap-2 rounded-lg px-2 py-2 text-[12px] text-neutral-600 hover:bg-white hover:text-neutral-900"><FileText className="size-3.5" />检验与趋势</Link><Link href="/medications" className="flex items-center gap-2 rounded-lg px-2 py-2 text-[12px] text-neutral-600 hover:bg-white hover:text-neutral-900"><Pill className="size-3.5" />用药记录</Link><Link href="/encounters" className="flex items-center gap-2 rounded-lg px-2 py-2 text-[12px] text-neutral-600 hover:bg-white hover:text-neutral-900"><Stethoscope className="size-3.5" />就诊记录</Link></div></div><div className="min-h-0 flex-1 overflow-y-auto border-t border-neutral-200 px-3 py-3"><div className="mb-2 flex items-center gap-2 px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-neutral-400"><History className="size-3" />近期对话</div>{conversations.length ? <div className="space-y-1">{conversations.map((item) => <button key={item.id} onClick={() => onSelectConversation(item.id)} className={`block w-full truncate rounded-lg px-2 py-2 text-left text-[12px] ${activeConversationId === item.id ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white'}`}>{item.title}</button>)}</div> : <p className="px-2 text-[11px] leading-5 text-neutral-400">你的健康问答会保存在本机。</p>}</div><div className="border-t border-neutral-200 p-3 text-[10px] leading-4 text-neutral-400">健康数据仅用于本次 AI 上下文，不构成医疗诊断。</div></> : <nav className="flex flex-col items-center gap-1 border-t border-neutral-200 py-3" aria-label="健康工作区"><Link href="/reports" title="综合健康分析" aria-label="综合健康分析" className="flex size-9 items-center justify-center rounded-lg text-accent-600 hover:bg-white"><Sparkles className="size-4" /></Link><Link href="/labs" title="检验与趋势" aria-label="检验与趋势" className="flex size-9 items-center justify-center rounded-lg text-neutral-600 hover:bg-white hover:text-neutral-900"><FileText className="size-4" /></Link><Link href="/medications" title="用药记录" aria-label="用药记录" className="flex size-9 items-center justify-center rounded-lg text-neutral-600 hover:bg-white hover:text-neutral-900"><Pill className="size-4" /></Link><Link href="/encounters" title="就诊记录" aria-label="就诊记录" className="flex size-9 items-center justify-center rounded-lg text-neutral-600 hover:bg-white hover:text-neutral-900"><Stethoscope className="size-4" /></Link></nav>}
+    </aside>
+    <section className="flex min-w-0 flex-1 flex-col">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-neutral-100 px-4 sm:px-6"><div className="flex items-center gap-3"><Menu className="size-4 text-neutral-500 lg:hidden" /><div><h1 className="text-[14px] font-semibold text-neutral-900">HealthManager AI</h1><p className="hidden text-[10px] text-neutral-400 sm:block">{profileName ? `正在为${profileName}分析健康数据${isOwnerProfile ? '（本人档案）' : '（家庭成员）'}` : '正在连接健康档案'}</p></div></div><div className="flex items-center gap-2"><label className="relative"><select value={model} onChange={(event) => onModelChange(event.target.value)} className="appearance-none rounded-lg border border-neutral-200 bg-white py-1.5 pl-2.5 pr-7 text-[11px] text-neutral-700 outline-none hover:border-neutral-300" aria-label="选择模型">{modelOptions.length ? modelOptions.map((option) => <option key={option} value={option}>{option}</option>) : <option value={model}>{model || '默认模型'}</option>}</select><ChevronDown className="pointer-events-none absolute right-2 top-2 size-3 text-neutral-400" /></label><select value={reasoningEffort} onChange={(event) => onReasoningEffortChange(event.target.value as 'low' | 'medium' | 'high')} className="rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-[11px] text-neutral-700 outline-none hover:border-neutral-300" aria-label="思考强度"><option value="low">快速</option><option value="medium">平衡</option><option value="high">深入</option></select><button onClick={onExport} disabled={!messages.length} className="hidden items-center gap-1 text-[11px] text-neutral-500 hover:text-accent-700 disabled:opacity-40 sm:inline-flex"><Download className="size-3" />导出</button></div></header>
+      <div className="flex min-h-0 flex-1"> <div className="flex min-w-0 flex-1 flex-col">{hasMessages ? <MessageThread messages={messages} onArtifactClick={onArtifactClick} /> : <div className="flex flex-1 items-center justify-center overflow-y-auto px-5"><div className="w-full max-w-2xl pb-10"><div className="mb-8"><div className="mb-4 flex size-11 items-center justify-center rounded-2xl bg-accent-100"><Bot className="size-5 text-accent-700" /></div><h2 className="text-3xl font-medium tracking-[-0.03em] text-neutral-900">今天想了解什么？</h2><p className="mt-2 max-w-lg text-[14px] leading-6 text-neutral-500">我会基于你已确认的检验、用药、病史和就诊记录回答，并标明数据不足的地方。</p></div><div className="grid gap-2 sm:grid-cols-2">{suggestions.map((suggestion) => <button key={suggestion} onClick={() => onSuggestionClick(suggestion)} className="rounded-xl border border-neutral-200 bg-white p-3 text-left text-[12px] text-neutral-600 transition hover:border-accent-300 hover:bg-accent-50 hover:text-accent-800">{suggestion}</button>)}</div></div></div>}<div className="border-t border-neutral-100 bg-white pt-3"><div className="mx-auto flex max-w-2xl items-center gap-1 px-4 pb-1 text-[10px] text-neutral-400"><BrainCircuit className="size-3" />思考强度：{reasoningEffort === 'low' ? '快速' : reasoningEffort === 'high' ? '深入' : '平衡'}{activeChannelName ? ` · 渠道：${activeChannelName}` : ' · 使用默认渠道'}</div><ChatInput value={input} onChange={onInputChange} onSubmit={onSubmit} onStop={onStop} isStreaming={isStreaming} autoFocus={!hasMessages} /></div></div>{panelOpen && <aside className="hidden w-[42%] min-w-80 border-l border-neutral-200 bg-neutral-50 xl:block"><InsightPanel insight={activeInsight} onClose={onPanelClose} /></aside>}</div>
+    </section>
+  </div>;
 }

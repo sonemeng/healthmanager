@@ -5,6 +5,15 @@ import { headers } from 'next/headers';
 import { createBlobStorage } from '@openvitals/blob-storage';
 import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE } from '@openvitals/common';
 
+function detectMimeType(file: File) {
+  if (file.type) return file.type;
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.md') || name.endsWith('.markdown')) return 'text/markdown';
+  if (name.endsWith('.txt')) return 'text/plain';
+  if (name.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  return '';
+}
+
 export async function POST(request: Request) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user?.id) {
@@ -18,8 +27,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'No file provided' }, { status: 400 });
   }
 
-  if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(file.type)) {
-    return NextResponse.json({ error: `Unsupported file type: ${file.type}` }, { status: 400 });
+  const mimeType = detectMimeType(file);
+  if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(mimeType)) {
+    return NextResponse.json({ error: `Unsupported file type: ${file.type || file.name}` }, { status: 400 });
   }
 
   if (file.size > MAX_FILE_SIZE) {
@@ -34,8 +44,8 @@ export async function POST(request: Request) {
   const result = await storage.upload({
     path: blobPath,
     data: buffer,
-    contentType: file.type,
+    contentType: mimeType,
   });
 
-  return NextResponse.json({ blobPath: result.path, contentHash });
+  return NextResponse.json({ blobPath: result.path, contentHash, mimeType });
 }

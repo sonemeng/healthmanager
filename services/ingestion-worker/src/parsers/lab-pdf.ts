@@ -36,6 +36,9 @@ export async function parseLabPdf(ctx: WorkflowContext): Promise<ParseResult> {
     if (artifact.mimeType === 'application/pdf') {
       const { extractTextFromPdf } = await import('../lib/pdf');
       textContent = await extractTextFromPdf(buffer);
+    } else if (artifact.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      const mammoth = await import('mammoth');
+      textContent = (await mammoth.extractRawText({ buffer })).value;
     } else {
       textContent = buffer.toString('utf-8');
     }

@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
 import { trpc } from "@/lib/trpc/client";
 import { TitleActionHeader } from "@/components/title-action-header";
 import { StatusBadge } from "@/components/health/status-badge";
@@ -54,6 +55,7 @@ export default function TimelinePage() {
   const medications = trpc.medications.list.useQuery({});
   const conditions = trpc.conditions.list.useQuery();
   const encounters = trpc.encounters.list.useQuery();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const isLoading =
     observations.isLoading ||
@@ -316,14 +318,14 @@ export default function TimelinePage() {
                       />
 
                       {/* Event content */}
-                      <div className="card flex-1 p-4 hover:border-accent-300 transition-colors">
+                      <button onClick={() => setSelectedId(selectedId === item.id ? null : item.id)} className="card flex-1 p-4 text-left hover:border-accent-300 transition-colors">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <p className="text-[14px] font-semibold text-neutral-900 font-body">
                               {item.title}
                             </p>
                             {item.description && (
-                              <p className="mt-1 text-[12px] text-neutral-500 font-body truncate">
+                              <p className={cn("mt-1 text-[12px] text-neutral-500 font-body", selectedId === item.id ? "whitespace-pre-wrap" : "truncate")}>
                                 {item.description}
                               </p>
                             )}
@@ -339,7 +341,8 @@ export default function TimelinePage() {
                           </span>
                           <ProvenancePill label={item.source} icon="◎" />
                         </div>
-                      </div>
+                        {selectedId === item.id && <div className="mt-3 border-t border-neutral-100 pt-3"><p className="text-[12px] leading-relaxed text-neutral-600">{item.description || "此记录没有额外说明。"}</p><Link href={`/ai?question=${encodeURIComponent(`请基于这条时间线记录回答，并说明需要向医生确认的事项：${formatDate(item.date)}，${item.title}。${item.description}`)}`} className="mt-3 inline-block text-[12px] font-medium text-accent-600 hover:text-accent-700">基于此记录问 AI</Link></div>}
+                      </button>
                     </div>
                   );
                 })}

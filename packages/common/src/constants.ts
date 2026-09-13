@@ -8,6 +8,9 @@ export const ALLOWED_MIME_TYPES = [
   "image/jpeg",
   "image/png",
   "application/json",
+  "text/plain",
+  "text/markdown",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/zip",
   "application/x-zip-compressed",
 ] as const;

@@ -7,11 +7,14 @@ import { deriveStatus } from '@/lib/health-utils';
 import { formatDate, formatObsValue } from '@/lib/utils';
 import { StatusBadge, type HealthStatus } from '@/components/health/status-badge';
 import { MiniSparkline } from '@/components/health/mini-sparkline';
-import { Printer, FileText, Sparkles, Copy } from 'lucide-react';
+import { Printer, FileText, Sparkles, Copy, Download } from 'lucide-react';
 import { Button } from '@/components/button';
 import { cn } from '@/lib/utils';
 import { calculateHealthScore } from '@/components/home/health-score';
 import { toast } from 'sonner';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { downloadText } from '@/lib/export';
 
 const CATEGORY_LABELS: Record<string, string> = {
   blood_chemistry: '血液生化',
@@ -73,6 +76,7 @@ type DateRangeKey = (typeof DATE_RANGES)[number]['key'];
 
 export default function ReportsPage() {
   const { data: session } = useSession();
+  const activeProfile = trpc.profiles.active.useQuery();
   const observations = trpc.observations.list.useQuery({ limit: 200 });
   const medications = trpc.medications.list.useQuery({});
   const conditions = trpc.conditions.list.useQuery();
@@ -103,16 +107,64 @@ export default function ReportsPage() {
     }
   };
 
+  const handleDownloadReport = () => {
+    const content = aiReportQuery.data?.content;
+    if (!content) return;
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `healthmanager-ai-report-${new Date().toISOString().slice(0, 10)}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadFamilySummary = () => {
+    const latest = obsItems
+      .slice()
+      .sort((a, b) => new Date(b.observedAt).getTime() - new Date(a.observedAt).getTime())
+      .slice(0, 20);
+    const lines = [
+      '# HealthManager 当前档案健康摘要',
+      '',
+      `生成日期：${new Date().toISOString().slice(0, 10)}`,
+      `档案姓名：${activeProfile.data?.name ?? session?.user?.name ?? '未填写'}`,
+      activeProfile.data?.birthDate ? `出生日期：${activeProfile.data.birthDate}` : '',
+      activeProfile.data?.bloodType ? `血型：${activeProfile.data.bloodType}` : '',
+      activeProfile.data?.allergies ? `过敏史：${activeProfile.data.allergies}` : '',
+      activeProfile.data?.emergencyContactName ? `紧急联系人：${activeProfile.data.emergencyContactName}${activeProfile.data.emergencyContactPhone ? `，${activeProfile.data.emergencyContactPhone}` : ''}` : '',
+      '',
+      '## 当前用药',
+      activeMeds.length ? activeMeds.map((med) => `- ${med.name}${med.dosage ? `，${med.dosage}` : ''}${med.frequency ? `，${med.frequency}` : ''}${med.indication ? `，用途：${med.indication}` : ''}`).join('\n') : '- 无记录',
+      '',
+      '## 活动病史',
+      condItems.filter((condition) => condition.status === 'active').length ? condItems.filter((condition) => condition.status === 'active').map((condition) => `- ${condition.name}${condition.severity ? `，${condition.severity}` : ''}${condition.onsetDate ? `，起始：${condition.onsetDate}` : ''}${condition.notes ? `，备注：${condition.notes}` : ''}`).join('\n') : '- 无记录',
+      '',
+      '## 近期就诊',
+      encItems.length ? encItems.slice(0, 10).map((encounter) => `- ${encounter.encounterDate}｜${encounter.type.replace(/_/g, ' ')}${encounter.provider ? `｜${encounter.provider}` : ''}${encounter.chiefComplaint ? `｜${encounter.chiefComplaint}` : ''}${encounter.summary ? `\n  ${encounter.summary}` : ''}`).join('\n') : '- 无记录',
+      '',
+      '## 最新检验记录',
+      latest.length ? latest.map((observation) => `- ${formatDate(observation.observedAt)}｜${observation.metricCode}：${observation.valueNumeric ?? observation.valueText ?? '未记录'}${observation.unit ? ` ${observation.unit}` : ''}${observation.isAbnormal ? '（提示异常）' : ''}`).join('\n') : '- 无记录',
+      '',
+      '## 使用提示',
+      '- 本摘要由个人健康档案自动整理，供家人、照护者或就诊时沟通使用。',
+      '- 请同时携带原始检查报告；本文件不构成医疗诊断、治疗建议或紧急医疗指引。',
+      '- 分享前请确认接收方可信，并注意其中包含个人健康信息。',
+    ].filter(Boolean).join('\n');
+    downloadText(`healthmanager-${activeProfile.data?.name ?? 'profile'}-summary-${new Date().toISOString().slice(0, 10)}`, lines, 'text/markdown;charset=utf-8', 'md');
+  };
+
   const isLoading = observations.isLoading || medications.isLoading || preferences.isLoading || metricDefs.isLoading;
 
   // Filter observations by date range
   const allObsItems = observations.data?.items ?? [];
   const obsItems = useMemo(() => {
     const range = DATE_RANGES.find((r) => r.key === dateRange);
-    if (!range || !('months' in range)) return allObsItems;
+    const confirmedItems = allObsItems.filter((item) => item.status !== 'flagged' && item.metricCode !== 'unmatched');
+    if (!range || !('months' in range)) return confirmedItems;
     const cutoff = new Date();
     cutoff.setMonth(cutoff.getMonth() - range.months);
-    return allObsItems.filter((o) => new Date(o.observedAt) >= cutoff);
+    return confirmedItems.filter((o) => new Date(o.observedAt) >= cutoff);
   }, [allObsItems, dateRange]);
   const medItems = medications.data?.items ?? [];
   const condItems = conditions.data ?? [];
@@ -206,7 +258,17 @@ export default function ReportsPage() {
   const totalWarning = totalFlagged - totalCritical;
   const healthScore = calculateHealthScore(totalNormal, totalWarning, totalCritical);
 
-  const handlePrint = () => window.print();
+  const handlePrint = () => {
+    const profileName = (activeProfile.data?.name ?? '健康档案').replace(/[\\/:*?"<>|]/g, '-');
+    const filename = `HealthManager-${profileName}-${new Date().toISOString().slice(0, 10)}.pdf`;
+    if (window.healthManagerDesktop) {
+      void window.healthManagerDesktop.exportPdf(filename).then((result) => {
+        if (!result.cancelled) toast.success('健康报告已导出为 PDF');
+      }).catch(() => toast.error('PDF 导出失败，请重试'));
+      return;
+    }
+    window.print();
+  };
 
   if (isLoading) {
     return (
@@ -241,7 +303,8 @@ export default function ReportsPage() {
             综合汇总你的健康数据，可分享给医生
           </p>
         </div>
-        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+          <Button icon={<Download />} text="导出 Markdown" variant="secondary" onClick={handleDownloadFamilySummary} />
           {/* Date range filter */}
           <div className="flex items-center border border-neutral-200 bg-neutral-50 p-0.5">
             {DATE_RANGES.map((r) => (
@@ -261,7 +324,7 @@ export default function ReportsPage() {
           </div>
           <Button
             icon={<Printer />}
-            text="打印"
+            text="导出 PDF"
             onClick={handlePrint}
           />
         </div>
@@ -288,12 +351,10 @@ export default function ReportsPage() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {aiReportQuery.data?.content && (
-              <Button
-                icon={<Copy />}
-                text="复制"
-                variant="secondary"
-                onClick={handleCopyReport}
-              />
+              <>
+                <Button icon={<Download />} text="下载 Markdown" variant="secondary" onClick={handleDownloadReport} />
+                <Button icon={<Copy />} text="复制" variant="secondary" onClick={handleCopyReport} />
+              </>
             )}
             <Button
               icon={<Sparkles />}
@@ -305,8 +366,19 @@ export default function ReportsPage() {
         </div>
         {aiReportQuery.data?.content && (
           <div className="mt-4 pt-4 border-t border-neutral-100">
-            <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-neutral-700 font-body">
-              {aiReportQuery.data.content}
+            <div className="text-[13px] leading-relaxed text-neutral-700 font-body">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  h2: ({ children }) => <h2 className="mb-2 mt-5 text-base font-semibold text-neutral-900 first:mt-0">{children}</h2>,
+                  h3: ({ children }) => <h3 className="mb-1 mt-4 text-sm font-semibold text-neutral-900">{children}</h3>,
+                  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                  ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5">{children}</ul>,
+                  ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5">{children}</ol>,
+                }}
+              >
+                {aiReportQuery.data.content}
+              </ReactMarkdown>
             </div>
           </div>
         )}
@@ -329,21 +401,21 @@ export default function ReportsPage() {
             </div>
             <div className="text-right">
               <p className="text-[14px] font-medium text-neutral-900 font-body">
-                {session?.user?.name ?? '患者'}
+                {activeProfile.data?.name ?? session?.user?.name ?? '患者'}
               </p>
-              {prefs?.dateOfBirth && (
+              {(activeProfile.data?.birthDate ?? prefs?.dateOfBirth) && (
                 <p className="text-[11px] font-mono text-neutral-500">
-                  出生日期：{prefs.dateOfBirth}
+                  出生日期：{activeProfile.data?.birthDate ?? prefs?.dateOfBirth}
                 </p>
               )}
-              {prefs?.biologicalSex && (
+              {(activeProfile.data?.gender ?? prefs?.biologicalSex) && (
                 <p className="text-[11px] font-mono text-neutral-500 capitalize">
-                  {prefs.biologicalSex === 'male' ? '男' : prefs.biologicalSex === 'female' ? '女' : prefs.biologicalSex}
+                  {(activeProfile.data?.gender ?? prefs?.biologicalSex) === 'male' ? '男' : (activeProfile.data?.gender ?? prefs?.biologicalSex) === 'female' ? '女' : activeProfile.data?.gender ?? prefs?.biologicalSex}
                 </p>
               )}
-              {prefs?.bloodType && (
+              {(activeProfile.data?.bloodType ?? prefs?.bloodType) && (
                 <p className="text-[11px] font-mono text-neutral-500">
-                  血型：{prefs.bloodType}
+                  血型：{activeProfile.data?.bloodType ?? prefs?.bloodType}
                 </p>
               )}
             </div>

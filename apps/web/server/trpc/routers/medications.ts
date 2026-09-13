@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { createRouter, protectedProcedure } from '../init';
-import { listMedications, createMedication, updateMedication, logMedicationAdherence, getAdherenceLogs } from '@openvitals/database';
+import { listMedications, createMedication, updateMedication, logMedicationAdherence, getAdherenceLogs, medications } from '@openvitals/database';
+import { and, eq } from 'drizzle-orm';
 import { getActiveProfileId } from '../active-profile';
 
 export const medicationsRouter = createRouter({
@@ -77,6 +78,21 @@ export const medicationsRouter = createRouter({
       if (!result) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Medication not found' });
       }
+      return { success: true };
+    }),
+
+  delete: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await ctx.db
+        .delete(medications)
+        .where(and(eq(medications.id, input.id), eq(medications.userId, ctx.userId)))
+        .returning({ id: medications.id });
+
+      if (!result.length) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Medication not found' });
+      }
+
       return { success: true };
     }),
 

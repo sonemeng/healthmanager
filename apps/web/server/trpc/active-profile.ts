@@ -11,14 +11,28 @@ export async function getActiveProfileId(
   const h = await headers();
   const raw = h.get('cookie') ?? '';
   const match = raw.match(/(?:^|;\s*)hm_profile=([^;]+)/);
-  if (!match?.[1]) return null;
-  const profileId = decodeURIComponent(match[1]);
   const db = getDb();
+  if (!match?.[1]) {
+    const [ownerProfile] = await db
+      .select({ id: profiles.id })
+      .from(profiles)
+      .where(and(eq(profiles.userId, userId), eq(profiles.isDefault, true)))
+      .limit(1);
+    return ownerProfile?.id ?? null;
+  }
+
+  const profileId = decodeURIComponent(match[1]);
   const [row] = await db
     .select({ id: profiles.id })
     .from(profiles)
     .where(and(eq(profiles.id, profileId), eq(profiles.userId, userId)))
     .limit(1);
-  // 校验归属，防伪造 cookie 越权
-  return row?.id ?? null;
+  // Invalid or stale cookies safely fall back to the account owner's profile.
+  if (row?.id) return row.id;
+  const [ownerProfile] = await db
+    .select({ id: profiles.id })
+    .from(profiles)
+    .where(and(eq(profiles.userId, userId), eq(profiles.isDefault, true)))
+    .limit(1);
+  return ownerProfile?.id ?? null;
 }

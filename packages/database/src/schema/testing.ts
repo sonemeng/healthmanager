@@ -10,6 +10,7 @@ import {
   timestamp,
 } from "drizzle-orm/pg-core";
 import { users } from "./users";
+import { profiles } from "./profiles";
 import { metricDefinitions } from "./metrics";
 
 // ── Lab Providers ────────────────────────────────────────────────────────────
@@ -82,6 +83,9 @@ export const userRetestSettings = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
     metricCode: varchar("metric_code", { length: 50 })
       .notNull()
       .references(() => metricDefinitions.id),
@@ -91,8 +95,9 @@ export const userRetestSettings = pgTable(
     updatedAt: timestamp("updated_at").defaultNow(),
   },
   (table) => [
-    unique("user_retest_settings_user_metric_uniq").on(
+    unique("user_retest_settings_user_profile_metric_uniq").on(
       table.userId,
+      table.profileId,
       table.metricCode,
     ),
   ],

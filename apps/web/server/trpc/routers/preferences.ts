@@ -1,12 +1,14 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createRouter, protectedProcedure } from "../init";
-import { users } from "@openvitals/database";
+import { profiles, users } from "@openvitals/database";
 
 export const preferencesRouter = createRouter({
   get: protectedProcedure.query(async ({ ctx }) => {
-    const [user] = await ctx.db
+    const [userRows, ownerProfiles] = await Promise.all([
+      ctx.db
       .select({
+        name: users.name,
         timezone: users.timezone,
         preferredUnits: users.preferredUnits,
         aiModel: users.aiModel,
@@ -19,24 +21,32 @@ export const preferencesRouter = createRouter({
       })
       .from(users)
       .where(eq(users.id, ctx.userId))
-      .limit(1);
+      .limit(1),
+      ctx.db
+        .select({ name: profiles.name, birthDate: profiles.birthDate, gender: profiles.gender, bloodType: profiles.bloodType })
+        .from(profiles)
+        .where(and(eq(profiles.userId, ctx.userId), eq(profiles.isDefault, true)))
+        .limit(1),
+    ]);
 
     return {
-      timezone: user?.timezone ?? "UTC",
-      preferredUnits: user?.preferredUnits ?? "metric",
-      aiModel: user?.aiModel ?? "claude-sonnet-4-20250514",
-      dateOfBirth: user?.dateOfBirth ?? null,
-      biologicalSex: user?.biologicalSex ?? null,
-      bloodType: user?.bloodType ?? null,
-      showOptimalRanges: user?.showOptimalRanges ?? true,
-      onboardingStep: user?.onboardingStep ?? 0,
-      onboardingJson: user?.onboardingJson ?? null,
+      name: ownerProfiles[0]?.name ?? userRows[0]?.name ?? "",
+      timezone: userRows[0]?.timezone ?? "UTC",
+      preferredUnits: userRows[0]?.preferredUnits ?? "metric",
+      aiModel: userRows[0]?.aiModel ?? "claude-sonnet-4-20250514",
+      dateOfBirth: ownerProfiles[0]?.birthDate ?? userRows[0]?.dateOfBirth ?? null,
+      biologicalSex: ownerProfiles[0]?.gender ?? userRows[0]?.biologicalSex ?? null,
+      bloodType: ownerProfiles[0]?.bloodType ?? userRows[0]?.bloodType ?? null,
+      showOptimalRanges: userRows[0]?.showOptimalRanges ?? true,
+      onboardingStep: userRows[0]?.onboardingStep ?? 0,
+      onboardingJson: userRows[0]?.onboardingJson ?? null,
     };
   }),
 
   update: protectedProcedure
     .input(
       z.object({
+        name: z.string().trim().min(1).max(255).optional(),
         timezone: z.string().optional(),
         preferredUnits: z.enum(["metric", "imperial"]).optional(),
         aiModel: z.string().optional(),
@@ -50,9 +60,11 @@ export const preferencesRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await ctx.db
+      await ctx.db.transaction(async (tx) => {
+        await tx
         .update(users)
         .set({
+          ...(input.name !== undefined && { name: input.name }),
           ...(input.timezone !== undefined && { timezone: input.timezone }),
           ...(input.preferredUnits !== undefined && {
             preferredUnits: input.preferredUnits,
@@ -74,6 +86,17 @@ export const preferencesRouter = createRouter({
           updatedAt: new Date(),
         })
         .where(eq(users.id, ctx.userId));
+        await tx
+          .update(profiles)
+          .set({
+            ...(input.name !== undefined && { name: input.name }),
+            ...(input.dateOfBirth !== undefined && { birthDate: input.dateOfBirth }),
+            ...(input.biologicalSex !== undefined && { gender: input.biologicalSex }),
+            ...(input.bloodType !== undefined && { bloodType: input.bloodType }),
+            updatedAt: new Date(),
+          })
+          .where(and(eq(profiles.userId, ctx.userId), eq(profiles.isDefault, true)));
+      });
 
       return { success: true };
     }),

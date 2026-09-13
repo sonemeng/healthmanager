@@ -1,4 +1,4 @@
-export { classifyDocumentPrompt, extractLabsPrompt, healthChatPrompt, extractLabsImageZhPrompt, healthReportZhPrompt } from './prompts/index';
+export { classifyDocumentPrompt, extractLabsPrompt, healthChatPrompt, extractLabsImageZhPrompt, healthReportZhPrompt, extractRecordCandidatesPrompt } from './prompts/index';
 
 export { resolveModel } from './model';
 export type { UserModelConfig } from './model';

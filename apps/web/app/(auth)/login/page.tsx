@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "@/lib/auth/client";
@@ -8,11 +8,39 @@ import { LogoWordmark } from "@/assets/app/images/logo";
 import { toast } from "sonner";
 import { Button } from "@/components/button";
 
+const RECENT_EMAILS_KEY = "healthmanager.recent-login-emails";
+
+function savedEmails() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(RECENT_EMAILS_KEY) ?? "[]");
+    return Array.isArray(value) ? value.filter((email): email is string => typeof email === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const [mostRecentEmail] = savedEmails();
+    if (mostRecentEmail) setEmail(mostRecentEmail);
+  }, []);
+
+  function handleEmailChange(value: string) {
+    const normalized = value.trim().toLowerCase();
+    if (normalized.length === 1) {
+      const match = savedEmails().find((saved) => saved.toLowerCase().startsWith(normalized));
+      if (match) {
+        setEmail(match);
+        return;
+      }
+    }
+    setEmail(value);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -23,6 +51,9 @@ export default function LoginPage() {
         toast.error(error.message ?? "邮箱或密码错误");
         return;
       }
+      const normalizedEmail = email.trim().toLowerCase();
+      const emails = [normalizedEmail, ...savedEmails().filter((saved) => saved.toLowerCase() !== normalizedEmail)].slice(0, 5);
+      window.localStorage.setItem(RECENT_EMAILS_KEY, JSON.stringify(emails));
       router.push("/home");
     } catch {
       toast.error("出错了，请重试");
@@ -55,8 +86,9 @@ export default function LoginPage() {
             id="email"
             type="email"
             required
+            autoComplete="email"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => handleEmailChange(e.target.value)}
             className="mt-1.5 block w-full rounded-lg border border-neutral-200 bg-white px-3.5 py-2.5 text-[14px] text-neutral-900 placeholder:text-neutral-400 transition-all focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100"
             placeholder="you@example.com"
           />
@@ -73,12 +105,14 @@ export default function LoginPage() {
             id="password"
             type="password"
             required
+            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="mt-1.5 block w-full rounded-lg border border-neutral-200 bg-white px-3.5 py-2.5 text-[14px] text-neutral-900 placeholder:text-neutral-400 transition-all focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100"
             placeholder="••••••••"
           />
         </div>
+        <p className="text-[11px] leading-relaxed text-neutral-400">输入已记住邮箱的首字母可快速预填邮箱；密码由系统密码管理器安全填充。</p>
 
         <Button text={loading ? "登录中…" : "登录"} loading={loading} />
       </form>

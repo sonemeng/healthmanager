@@ -14,6 +14,9 @@
     "db:generate": "turbo db:generate --filter=@openvitals/database",
     "db:migrate": "turbo db:migrate --filter=@openvitals/database",
     "db:seed": "turbo db:seed --filter=@openvitals/database",
+    "desktop:dev": "pnpm --filter @healthmanager/desktop dev",
+    "desktop:build": "pnpm --filter @healthmanager/desktop build",
+    "desktop:dist": "pnpm --filter @healthmanager/desktop dist",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,css,md}\""
   },
   "devDependencies": {

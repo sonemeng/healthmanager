@@ -1,7 +1,10 @@
 import { createAuthClient } from 'better-auth/react';
 
 export const authClient = createAuthClient({
-  baseURL: process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000',
+  // Browser requests must target the current desktop-hosted web server. Public
+  // environment variables are substituted at build time and otherwise retain
+  // the development URL in the packaged application.
+  baseURL: typeof window === 'undefined' ? undefined : window.location.origin,
 });
 
 export const { useSession, signIn, signOut, signUp } = authClient;

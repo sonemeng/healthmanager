@@ -22,6 +22,8 @@ interface CorrelationMetric {
   unit: string | null;
   beforeAvg: number;
   afterAvg: number;
+  beforeCount: number;
+  afterCount: number;
   changePct: number;
   beforeStatus: HealthStatus;
   afterStatus: HealthStatus;
@@ -73,7 +75,7 @@ export default function CorrelationsPage() {
 
       // Group observations by metric
       const byMetric = new Map<string, typeof obsItems>();
-      for (const obs of obsItems) {
+       for (const obs of obsItems.filter((item) => item.status !== 'flagged' && item.metricCode !== 'unmatched')) {
         const existing = byMetric.get(obs.metricCode) ?? [];
         existing.push(obs);
         byMetric.set(obs.metricCode, existing);
@@ -94,7 +96,7 @@ export default function CorrelationsPage() {
         );
 
         // Need data on both sides to show a correlation
-        if (before.length === 0 || after.length === 0) continue;
+        if (before.length < 2 || after.length < 2) continue;
 
         const beforeAvg = before.reduce((sum, o) => sum + (o.valueNumeric ?? 0), 0) / before.length;
         const afterAvg = after.reduce((sum, o) => sum + (o.valueNumeric ?? 0), 0) / after.length;
@@ -148,6 +150,8 @@ export default function CorrelationsPage() {
           unit: latestAfter.unit ?? def?.unit ?? null,
           beforeAvg: Math.round(beforeAvg * 100) / 100,
           afterAvg: Math.round(afterAvg * 100) / 100,
+          beforeCount: before.length,
+          afterCount: after.length,
           changePct: Math.round(changePct * 10) / 10,
           beforeStatus,
           afterStatus,
@@ -194,14 +198,13 @@ export default function CorrelationsPage() {
     return (
       <div>
         <h1 className="text-[24px] font-display font-medium tracking-[-0.03em] text-neutral-900 mb-6">
-          Correlations
+          用药相关变化
         </h1>
         <div className="card p-8 text-center">
           <GitCompareArrows className="size-8 text-neutral-300 mx-auto mb-3" />
           <h2 className="text-[16px] font-semibold text-neutral-900 font-display">暂无关联分析结果</h2>
           <p className="text-[13px] text-neutral-500 font-body mt-1 max-w-md mx-auto">
-            Correlations show how your biomarkers changed after starting medications.
-            You need lab results from both before and after starting a medication to see correlations.
+            需要同一指标在开始用药前后各至少有 2 次有效化验结果，才能显示前后变化。
           </p>
         </div>
       </div>
@@ -216,10 +219,10 @@ export default function CorrelationsPage() {
     <div>
       <div className="mb-6">
         <h1 className="text-[24px] font-display font-medium tracking-[-0.03em] text-neutral-900">
-          Correlations
+          用药相关变化
         </h1>
         <p className="text-[13px] text-neutral-500 font-body mt-1">
-          How your biomarkers changed after starting medications
+          比较开始用药前后的指标均值；仅用于观察时间上的相关变化，不能证明药物导致该变化。
         </p>
       </div>
 
@@ -298,6 +301,9 @@ export default function CorrelationsPage() {
                 </span>
               )}
             </div>
+            <p className="mt-3 text-[11px] leading-relaxed text-neutral-500">
+              结果未控制饮食、运动、其他治疗、检验方法和自然波动等因素，不能替代医生判断或用于调整用药。
+            </p>
           </div>
 
           {/* Correlation sections */}
@@ -366,6 +372,7 @@ function CorrelationSection({
                 <ArrowRight className="size-3 text-neutral-300" />
                 <StatusBadge status={m.afterStatus} label={m.afterStatus} />
               </div>
+              <span className="mt-1 block text-[10px] font-mono text-neutral-400">用药前 {m.beforeCount} 次，用药后 {m.afterCount} 次</span>
             </div>
 
             {/* Before/After values */}

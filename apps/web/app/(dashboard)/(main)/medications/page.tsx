@@ -9,17 +9,33 @@ import { useModal } from '@/components/modal/provider';
 import { Button } from '@/components/button';
 import { formatDate } from '@/lib/utils';
 import { Pill, Plus, Syringe, Tablets, Heart, ShieldCheck, Stethoscope, Download } from 'lucide-react';
-import { downloadCsv } from '@/lib/export';
+import { downloadCsv, downloadText } from '@/lib/export';
+import { ModuleImports } from '@/components/health/module-imports';
 import { AdherenceTracker } from '@/components/health/adherence-tracker';
+import { toast } from 'sonner';
 
 const emptyIcons = [Pill, Syringe, Tablets, Heart, ShieldCheck, Stethoscope];
 
 export default function MedicationsPage() {
   const modal = useModal();
   const { data, isLoading } = trpc.medications.list.useQuery({});
+  const utils = trpc.useUtils();
   const items = data?.items ?? [];
 
   const openAddModal = () => modal.show(<AddMedicationModal />);
+  const deleteMutation = trpc.medications.delete.useMutation({
+    onSuccess: () => {
+      utils.medications.list.invalidate();
+      toast.success('用药记录已删除');
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const handleDelete = (id: string, name: string) => {
+    if (window.confirm(`确定删除“${name}”吗？此操作无法撤销。`)) {
+      deleteMutation.mutate({ id });
+    }
+  };
 
   if (isLoading) {
     return (
@@ -37,7 +53,7 @@ export default function MedicationsPage() {
   if (items.length === 0) {
     return (
       <div>
-        <TitleActionHeader title="用药记录" subtitle="管理你的药物、补剂与服药依从性。" onAddButtonClick={openAddModal} addButtonText="添加药物" />
+        <TitleActionHeader title="用药记录" subtitle="管理你的药物、补剂与服药依从性。" actions={<><Button variant="outline-subtle" size="sm" icon={<Download />} text="导出 CSV" onClick={() => downloadCsv('healthmanager-medications', ['Name', 'Generic Name', 'Category', 'Dosage', 'Frequency', 'Route', 'Prescriber', 'Indication', 'Status', 'Start Date', 'End Date'], [])} /><Button icon={<Plus />} text="添加药物" onClick={openAddModal} /></>} />
         <div className="mt-7">
           <AnimatedEmptyState
             title="尚未添加药物"
@@ -47,6 +63,7 @@ export default function MedicationsPage() {
               <Button text="添加药物" icon={<Plus className="h-4 w-4" />} onClick={openAddModal} />
             }
           />
+          <ModuleImports target="medication" />
         </div>
       </div>
     );
@@ -62,8 +79,8 @@ export default function MedicationsPage() {
         subtitle="管理你的药物、补剂与服药依从性。"
         onAddButtonClick={openAddModal}
         addButtonText="添加药物"
-        actions={
-          items.length > 0 ? (
+        actions={<>
+          <>
             <Button
               variant="outline-subtle"
               size="sm"
@@ -89,8 +106,9 @@ export default function MedicationsPage() {
                 );
               }}
             />
-          ) : undefined
-        }
+            <Button variant="outline-subtle" size="sm" icon={<Download />} text="导出详细文档" onClick={() => downloadText('healthmanager-medications-detail', ['# HealthManager 用药记录', '', `生成日期：${new Date().toISOString().slice(0, 10)}`, '', ...(items.length ? items.map((m) => `## ${m.name}\n- 状态：${m.isActive ? '在用' : '已停用'}\n- 剂量：${m.dosage ?? '未记录'}\n- 频次：${m.frequency ?? '未记录'}\n- 用途：${m.indication ?? '未记录'}\n- 开方医生：${m.prescriber ?? '未记录'}\n- 起止日期：${m.startDate ?? '未记录'} 至 ${m.endDate ?? '至今'}`) : ['暂无用药记录。']), '', '本文件含个人健康信息，仅应分享给可信的家人、照护者或医疗专业人员。'].join('\n'), 'text/markdown;charset=utf-8', 'md')} />
+          </>
+        </>}
       />
 
       {/* Adherence tracker */}
@@ -111,6 +129,8 @@ export default function MedicationsPage() {
                 indication={med.indication ?? '—'}
                 status="active"
                 startDate={med.startDate ? formatDate(med.startDate) : '—'}
+                onDelete={() => handleDelete(med.id, med.name)}
+                isDeleting={deleteMutation.isPending}
               />
             ))}
           </div>
@@ -132,11 +152,14 @@ export default function MedicationsPage() {
                 indication={med.indication ?? '—'}
                 status="discontinued"
                 startDate={med.startDate ? formatDate(med.startDate) : '—'}
+                onDelete={() => handleDelete(med.id, med.name)}
+                isDeleting={deleteMutation.isPending}
               />
             ))}
           </div>
         </div>
       )}
+      <ModuleImports target="medication" />
     </div>
   );
 }

@@ -2,9 +2,22 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { eq, and, desc, gte, inArray, lte, type SQL } from 'drizzle-orm';
 import { createRouter, protectedProcedure, publicProcedure } from '../init';
-import { getActiveGrants, sharePolicies, accessGrants, shareTemplates, users, medications, conditions, observations as observationsTable } from '@openvitals/database';
+import { getActiveGrants, sharePolicies, accessGrants, shareTemplates, profiles, medications, conditions, observations as observationsTable } from '@openvitals/database';
+import { getActiveProfileId } from '../active-profile';
 import { emitEvent } from '@openvitals/events';
 import crypto from 'crypto';
+
+function hashSharePassword(password: string, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifySharePassword(password: string, stored: string) {
+  const [salt, expected] = stored.split(':');
+  if (!salt || !expected) return false;
+  const actual = crypto.scryptSync(password, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
+}
 
 export const sharingRouter = createRouter({
   createPolicy: protectedProcedure
@@ -15,13 +28,16 @@ export const sharingRouter = createRouter({
       accessLevel: z.enum(['view', 'view_download', 'full']).default('view'),
       dateFrom: z.date().optional(),
       dateTo: z.date().optional(),
-      expiresAt: z.date().optional(),
+      expiresAt: z.date().nullable().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+      if (!profileId) throw new TRPCError({ code: 'BAD_REQUEST', message: '请先选择健康档案' });
       const [policy] = await ctx.db
         .insert(sharePolicies)
         .values({
           userId: ctx.userId,
+          profileId,
           name: input.name,
           templateId: input.templateId,
           categories: input.categories,
@@ -39,6 +55,7 @@ export const sharingRouter = createRouter({
     .input(z.object({
       policyId: z.string().uuid(),
       recipientEmail: z.string().email().optional(),
+      password: z.string().min(8).max(128).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       // Verify policy belongs to user
@@ -60,6 +77,8 @@ export const sharingRouter = createRouter({
           sharePolicyId: input.policyId,
           recipientEmail: input.recipientEmail,
           token,
+          hasPassword: Boolean(input.password),
+          passwordHash: input.password ? hashSharePassword(input.password) : null,
         })
         .returning();
 
@@ -82,7 +101,8 @@ export const sharingRouter = createRouter({
 
   listGrants: protectedProcedure
     .query(async ({ ctx }) => {
-      const items = await getActiveGrants(ctx.db, { userId: ctx.userId });
+      const profileId = await getActiveProfileId(ctx.userId);
+      const items = await getActiveGrants(ctx.db, { userId: ctx.userId, profileId });
       return { items };
     }),
 
@@ -128,7 +148,7 @@ export const sharingRouter = createRouter({
   // ── Public endpoints for share recipients ─────────────────────────────
 
   getSharedData: publicProcedure
-    .input(z.object({ token: z.string() }))
+    .input(z.object({ token: z.string(), password: z.string().max(128).optional() }))
     .query(async ({ ctx, input }) => {
       // Look up grant and policy
       const grantRows = await ctx.db
@@ -136,10 +156,12 @@ export const sharingRouter = createRouter({
           grantId: accessGrants.id,
           isActive: accessGrants.isActive,
           hasPassword: accessGrants.hasPassword,
+          passwordHash: accessGrants.passwordHash,
           accessCount: accessGrants.accessCount,
           policyId: sharePolicies.id,
           policyName: sharePolicies.name,
           policyUserId: sharePolicies.userId,
+          profileId: sharePolicies.profileId,
           categories: sharePolicies.categories,
           accessLevel: sharePolicies.accessLevel,
           dateFrom: sharePolicies.dateFrom,
@@ -161,16 +183,21 @@ export const sharingRouter = createRouter({
       if (!grant.isActive || !grant.policyIsActive) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'This share link has been revoked.' });
       }
+      if (grant.hasPassword && (!input.password || !grant.passwordHash || !verifySharePassword(input.password, grant.passwordHash))) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: '此分享链接需要密码' });
+      }
 
       if (grant.expiresAt && grant.expiresAt < new Date()) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'This share link has expired.' });
       }
 
-      // Get sharer's name
-      const [sharer] = await ctx.db
-        .select({ name: users.name })
-        .from(users)
-        .where(eq(users.id, grant.policyUserId))
+       // The share link is permanently scoped to its profile, never to the
+       // currently selected profile in a later browser session.
+       if (!grant.profileId) throw new TRPCError({ code: 'NOT_FOUND', message: 'This legacy share link is no longer available.' });
+       const [sharer] = await ctx.db
+         .select({ name: profiles.name })
+         .from(profiles)
+         .where(and(eq(profiles.id, grant.profileId), eq(profiles.userId, grant.policyUserId)))
         .limit(1);
 
       const categories = (grant.categories as string[]) ?? [];
@@ -179,7 +206,8 @@ export const sharingRouter = createRouter({
         (category) => category !== 'medication' && category !== 'condition',
       );
       const obsWhere: SQL[] = [
-        eq(observationsTable.userId, grant.policyUserId),
+         eq(observationsTable.userId, grant.policyUserId),
+         eq(observationsTable.profileId, grant.profileId),
       ];
       if (observationCategories.length > 0) {
         obsWhere.push(inArray(observationsTable.category, observationCategories));
@@ -242,7 +270,7 @@ export const sharingRouter = createRouter({
             startDate: medications.startDate,
           })
           .from(medications)
-          .where(eq(medications.userId, grant.policyUserId))
+           .where(and(eq(medications.userId, grant.policyUserId), eq(medications.profileId, grant.profileId)))
           .orderBy(desc(medications.createdAt));
         sharedMeds = meds;
       }
@@ -263,7 +291,7 @@ export const sharingRouter = createRouter({
             onsetDate: conditions.onsetDate,
           })
           .from(conditions)
-          .where(eq(conditions.userId, grant.policyUserId))
+           .where(and(eq(conditions.userId, grant.policyUserId), eq(conditions.profileId, grant.profileId)))
           .orderBy(desc(conditions.createdAt));
         sharedConditions = conds;
       }

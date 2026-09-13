@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useMemo } from 'react';
+import { use, useMemo, useState } from 'react';
 import { trpc } from '@/lib/trpc/client';
 import { StatusBadge, type HealthStatus } from '@/components/health/status-badge';
 import { MiniSparkline } from '@/components/health/mini-sparkline';
@@ -48,7 +48,8 @@ export default function SharedDataPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = use(params);
-  const { data, isLoading, error } = trpc.sharing.getSharedData.useQuery({ token });
+  const [password, setPassword] = useState('');
+  const { data, isLoading, error } = trpc.sharing.getSharedData.useQuery({ token, ...(password ? { password } : {}) });
 
   if (isLoading) {
     return (
@@ -56,6 +57,20 @@ export default function SharedDataPage({
         <div className="text-center">
           <div className="size-8 border-2 border-accent-300 border-t-accent-600 animate-spin mx-auto mb-4" />
           <p className="text-[13px] text-neutral-500 font-body">Loading shared data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error?.message === '此分享链接需要密码') {
+    return (
+      <div className="min-h-screen bg-neutral-50 flex items-center justify-center p-6">
+        <div className="card max-w-md w-full p-8 text-center">
+          <Lock className="size-10 text-neutral-300 mx-auto mb-4" />
+          <h1 className="text-[18px] font-display font-semibold text-neutral-900">此分享链接受密码保护</h1>
+          <p className="mt-2 text-[13px] text-neutral-500">请输入分享人提供的访问密码。</p>
+          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoFocus className="mt-5 w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm" placeholder="访问密码" />
+          {password && <p className="mt-2 text-[12px] text-red-600">密码不正确，请重试。</p>}
         </div>
       </div>
     );

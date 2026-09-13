@@ -42,6 +42,15 @@ export async function processWorkflow(ctx: WorkflowContext): Promise<void> {
     console.log(`[workflow] Extracted ${parseResult.extractions.length} results`);
     const parseNeedsReview = parseResult.rawMetadata?.needsReview === true;
 
+    if (parseResult.rawMetadata?.candidates) {
+      const [existingJob] = await db.select({ errorDetailJson: importJobs.errorDetailJson })
+        .from(importJobs).where(eq(importJobs.id, ctx.importJobId)).limit(1);
+      // Preserve the module selected by the user when parser results are saved.
+      await db.update(importJobs).set({
+        errorDetailJson: { ...(existingJob?.errorDetailJson as Record<string, unknown> | null), ...parseResult.rawMetadata },
+      }).where(eq(importJobs.id, ctx.importJobId));
+    }
+
     if (parseResult.extractions.length === 0) {
       const reviewReason = typeof parseResult.rawMetadata?.reviewReason === 'string'
         ? parseResult.rawMetadata.reviewReason

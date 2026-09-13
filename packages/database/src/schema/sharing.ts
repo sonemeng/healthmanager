@@ -10,6 +10,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './users';
+import { profiles } from './profiles';
 
 // ── Share Policies ─────────────────────────────────────────────────────────────
 
@@ -18,6 +19,8 @@ export const sharePolicies = pgTable('share_policies', {
   userId: text('user_id')
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
+  profileId: text('profile_id')
+    .references(() => profiles.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 255 }).notNull(),
   templateId: varchar('template_id', { length: 50 }),
   categories: jsonb('categories').notNull(),

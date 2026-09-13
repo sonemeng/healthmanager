@@ -9,11 +9,11 @@ import {
   metricDefinitions,
   observations,
   optimalRanges,
+  profiles,
   userOptimalRanges,
-  users,
 } from "@openvitals/database";
-import { computeAge } from "@/lib/demographics";
 import { deriveStatus, deriveOptimalStatus } from "@/lib/health-utils";
+import { getActiveProfileId } from "../active-profile";
 
 // Categories that are continuously measured (not lab-tested)
 const EXCLUDED_CATEGORIES = ["wearable", "vital_sign"];
@@ -34,14 +34,14 @@ export const testingRouter = createRouter({
   "panels.list": protectedProcedure
     .input(z.object({ category: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      // Get user sex for filtering
-      const [user] = await ctx.db
-        .select({ biologicalSex: users.biologicalSex })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
+      const profileId = await getActiveProfileId(ctx.userId);
+      const [profile] = await ctx.db
+        .select({ gender: profiles.gender })
+        .from(profiles)
+        .where(and(eq(profiles.id, profileId ?? ""), eq(profiles.userId, ctx.userId)))
         .limit(1);
 
-      const userSex = user?.biologicalSex ?? null;
+      const profileSex = profile?.gender ?? null;
 
       let query = ctx.db
         .select({
@@ -68,13 +68,14 @@ export const testingRouter = createRouter({
 
       // Filter by sex: show panels with no targetSex or matching user sex
       return rows.filter(
-        (p) => p.targetSex === null || p.targetSex === userSex,
+        (p) => p.targetSex === null || p.targetSex === profileSex,
       );
     }),
 
   "panels.getByIdWithStatus": protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
       // Get panel
       const [panel] = await ctx.db
         .select()
@@ -121,6 +122,7 @@ export const testingRouter = createRouter({
               .where(
                 and(
                   eq(observations.userId, ctx.userId),
+                  ...(profileId ? [eq(observations.profileId, profileId)] : []),
                   inArray(observations.metricCode, metricCodes),
                 ),
               )
@@ -209,16 +211,8 @@ export const testingRouter = createRouter({
   // ── Retest Planner ───────────────────────────────────────────────────────
 
   "retest.getRecommendations": protectedProcedure.query(async ({ ctx }) => {
-    // Get user demographics
-    const [user] = await ctx.db
-      .select({
-        dateOfBirth: users.dateOfBirth,
-        biologicalSex: users.biologicalSex,
-      })
-      .from(users)
-      .where(eq(users.id, ctx.userId))
-      .limit(1);
-
+    const profileId = await getActiveProfileId(ctx.userId);
+    if (!profileId) return [];
     // Get all user's latest observations (excluding wearables/vitals)
     const allObs = await ctx.db
       .selectDistinctOn([observations.metricCode], {
@@ -235,6 +229,7 @@ export const testingRouter = createRouter({
       .where(
         and(
           eq(observations.userId, ctx.userId),
+          ...(profileId ? [eq(observations.profileId, profileId)] : []),
           notInArray(observations.category, EXCLUDED_CATEGORIES),
         ),
       )
@@ -257,7 +252,12 @@ export const testingRouter = createRouter({
       ctx.db
         .select()
         .from(userRetestSettings)
-        .where(eq(userRetestSettings.userId, ctx.userId)),
+        .where(
+          and(
+            eq(userRetestSettings.userId, ctx.userId),
+            eq(userRetestSettings.profileId, profileId),
+          ),
+        ),
     ]);
 
     const defMap = new Map(metricDefs.map((d) => [d.id, d]));
@@ -368,15 +368,18 @@ export const testingRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+      if (!profileId) throw new Error("健康档案不存在");
       await ctx.db
         .insert(userRetestSettings)
         .values({
           userId: ctx.userId,
+          profileId,
           metricCode: input.metricCode,
           retestIntervalDays: input.retestIntervalDays,
         })
         .onConflictDoUpdate({
-          target: [userRetestSettings.userId, userRetestSettings.metricCode],
+          target: [userRetestSettings.userId, userRetestSettings.profileId, userRetestSettings.metricCode],
           set: {
             retestIntervalDays: input.retestIntervalDays,
             updatedAt: new Date(),
@@ -388,11 +391,14 @@ export const testingRouter = createRouter({
   "retest.deleteOverride": protectedProcedure
     .input(z.object({ metricCode: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+      if (!profileId) throw new Error("健康档案不存在");
       await ctx.db
         .delete(userRetestSettings)
         .where(
           and(
             eq(userRetestSettings.userId, ctx.userId),
+            eq(userRetestSettings.profileId, profileId),
             eq(userRetestSettings.metricCode, input.metricCode),
           ),
         );
@@ -402,16 +408,19 @@ export const testingRouter = createRouter({
   "retest.togglePause": protectedProcedure
     .input(z.object({ metricCode: z.string(), isPaused: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+      if (!profileId) throw new Error("健康档案不存在");
       await ctx.db
         .insert(userRetestSettings)
         .values({
           userId: ctx.userId,
+          profileId,
           metricCode: input.metricCode,
           retestIntervalDays: 180, // default
           isPaused: input.isPaused,
         })
         .onConflictDoUpdate({
-          target: [userRetestSettings.userId, userRetestSettings.metricCode],
+          target: [userRetestSettings.userId, userRetestSettings.profileId, userRetestSettings.metricCode],
           set: {
             isPaused: input.isPaused,
             updatedAt: new Date(),

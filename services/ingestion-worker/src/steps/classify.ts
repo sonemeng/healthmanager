@@ -27,12 +27,19 @@ export async function classify(
 
   if (!artifact) throw new Error(`Artifact ${ctx.artifactId} not found`);
 
-  // 图片分支：图片没有文本，直接分流到视觉化验单解析器
+  const [job] = await db.select({ classifiedType: importJobs.classifiedType, classificationConfidence: importJobs.classificationConfidence })
+    .from(importJobs).where(eq(importJobs.id, ctx.importJobId)).limit(1);
+  const forcedDocumentType = job?.classificationConfidence === 1
+    ? job.classifiedType as ClassificationResult["documentType"] | null
+    : null;
+
+  // Image classification needs vision input. Files with no extractable text are
+  // routed to the reviewable candidate parser rather than being assumed to be labs.
   if (artifact.mimeType.startsWith("image/")) {
     const result: ClassificationResult = {
-      documentType: "lab_report",
-      confidence: 0.9,
-      reasoning: "Image file, routed to vision lab report parser",
+      documentType: forcedDocumentType ?? "unknown",
+      confidence: forcedDocumentType ? 1 : 0.8,
+      reasoning: forcedDocumentType ? "Module-specific import type" : "Image file, routed to reviewable health-record extraction",
     };
     await db
       .update(importJobs)
@@ -122,6 +129,9 @@ export async function classify(
   if (artifact.mimeType === "application/pdf") {
     const { extractTextFromPdf } = await import("../lib/pdf");
     textContent = await extractTextFromPdf(buffer);
+  } else if (artifact.mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    const mammoth = await import("mammoth");
+    textContent = (await mammoth.extractRawText({ buffer })).value;
   } else {
     textContent = buffer.toString("utf-8");
   }
@@ -147,16 +157,18 @@ export async function classify(
     .where(and(eq(aiChannels.userId, ctx.userId), eq(aiChannels.isActive, true)))
     .limit(1);
 
-  const { text } = await generateText({
-    model: resolveModel(userRow?.aiModel ?? modelId, channel
-      ? { baseUrl: channel.baseUrl, apiKey: channel.apiKey, protocol: channel.protocol }
-      : undefined),
-    system: classifyDocumentPrompt,
-    prompt: `Document type: ${artifact.mimeType}\nFile name: ${artifact.fileName}\n\nContent:\n${textContent.slice(0, 10000)}`,
-  });
-
   let result: ClassificationResult;
-  try {
+  if (forcedDocumentType) {
+    // PDF/text still needs extraction for the module candidate parser.
+    result = { documentType: forcedDocumentType, confidence: 1, reasoning: "Module-specific import type" };
+  } else try {
+    const { text } = await generateText({
+      model: resolveModel(userRow?.aiModel ?? modelId, channel
+        ? { baseUrl: channel.baseUrl, apiKey: channel.apiKey, protocol: channel.protocol }
+        : undefined),
+      system: classifyDocumentPrompt,
+      prompt: `Document type: ${artifact.mimeType}\nFile name: ${artifact.fileName}\n\nContent:\n${textContent.slice(0, 10000)}`,
+    });
     // Strip markdown code fences if present
     const jsonStr = text
       .replace(/^```(?:json)?\s*\n?/m, "")
@@ -170,10 +182,7 @@ export async function classify(
       reasoning: parsed.reasoning ?? "",
     };
   } catch (e) {
-    console.error(
-      "[classify] Failed to parse AI response:",
-      text.slice(0, 200),
-    );
+    console.error("[classify] Failed to classify document:", e);
     result = {
       documentType: "unknown",
       confidence: 0.3,

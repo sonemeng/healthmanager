@@ -7,6 +7,7 @@ import { parseLabPdf } from "../parsers/lab-pdf";
 import { parseLabImage } from "../parsers/lab-image";
 import { parseCsvImport } from "../parsers/csv-importer";
 import { parseAppleHealthExport } from "../parsers/apple-health-xml";
+import { parseRecordCandidates } from "../parsers/record-candidates";
 
 export async function parse(
   ctx: WorkflowContext,
@@ -42,6 +43,11 @@ export async function parse(
     > = {
       csv_export: parseCsvImport,
       apple_health_export: parseAppleHealthExport,
+      encounter_note: parseRecordCandidates,
+      imaging_report: parseRecordCandidates,
+      dental_record: parseRecordCandidates,
+      immunization_record: parseRecordCandidates,
+      unknown: parseRecordCandidates,
     };
     parser = parserMap[documentType];
   }

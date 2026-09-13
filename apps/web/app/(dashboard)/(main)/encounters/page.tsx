@@ -15,12 +15,14 @@ import {
   MapPin,
   User,
   MoreVertical,
+  Pencil,
   Trash2,
   Clock,
   Download,
   type LucideIcon,
 } from "lucide-react";
-import { downloadCsv } from "@/lib/export";
+import { downloadCsv, downloadText } from "@/lib/export";
+import { ModuleImports } from "@/components/health/module-imports";
 
 const encounterTypeConfig: Record<
   string,
@@ -102,7 +104,9 @@ export default function EncountersPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline-subtle" size="sm" icon={<Download />} text="导出详细文档" onClick={() => downloadText("healthmanager-encounters-detail", ["# HealthManager 就诊记录", "", `生成日期：${new Date().toISOString().slice(0, 10)}`, "", ...(encounters?.length ? encounters.map((e) => `## ${e.encounterDate}｜${encounterTypeConfig[e.type]?.label ?? e.type}\n- 医生：${e.provider ?? "未记录"}\n- 医疗机构：${e.facility ?? "未记录"}\n- 主诉：${e.chiefComplaint ?? "未记录"}\n- 摘要：${e.summary ?? "无"}`) : ["暂无就诊记录。"]), "", "本文件含个人健康信息，仅应分享给可信的家人、照护者或医疗专业人员。"].join("\n\n"), "text/markdown;charset=utf-8", "md")} />
           {encounters && encounters.length > 0 && (
+            <>
             <Button
               variant="outline-subtle"
               size="sm"
@@ -123,10 +127,11 @@ export default function EncountersPage() {
                 );
               }}
             />
+            </>
           )}
           <Button
             icon={<Plus />}
-            text="Log Encounter"
+            text="记录就诊"
             onClick={() => modal.show(<AddEncounterModal />)}
           />
         </div>
@@ -231,6 +236,16 @@ export default function EncountersPage() {
                         <div className="absolute right-0 top-8 z-20 w-36 bg-white border border-neutral-200 py-1">
                           <button
                             onClick={() => {
+                              modal.show(<AddEncounterModal encounter={encounter} />);
+                              setMenuOpen(null);
+                            }}
+                            className="w-full px-3 py-2 text-left text-[12px] font-body text-neutral-700 hover:bg-neutral-50 transition-colors flex items-center gap-2 cursor-pointer"
+                          >
+                            <Pencil className="size-3.5" />
+                            编辑
+                          </button>
+                          <button
+                            onClick={() => {
                               deleteMutation.mutate({ id: encounter.id });
                               setMenuOpen(null);
                             }}
@@ -249,6 +264,7 @@ export default function EncountersPage() {
           })}
         </div>
       )}
+      <ModuleImports target="encounter" />
     </div>
   );
 }

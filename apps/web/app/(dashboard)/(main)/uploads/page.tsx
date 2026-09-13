@@ -19,6 +19,7 @@ import {
   Trash2,
   RotateCw,
 } from "lucide-react";
+import { getActiveProfileCookie } from "@/components/settings/member-switcher";
 
 const emptyIcons = [
   FileText,
@@ -44,6 +45,15 @@ type ImportJob = {
   mimeType: string;
   fileSize: number | null;
 };
+
+function uploadMimeType(file: File) {
+  if (file.type) return file.type;
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".md") || name.endsWith(".markdown")) return "text/markdown";
+  if (name.endsWith(".txt")) return "text/plain";
+  if (name.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  return "";
+}
 
 const importColumns: DataTableColumn<ImportJob>[] = [
   {
@@ -118,20 +128,20 @@ export default function UploadsPage() {
     fileName: string;
   } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [confirmUpload, setConfirmUpload] = useState(false);
 
-  // 家庭成员归属（默认上次选择，存 localStorage hm.activeProfile）
+  // Each import begins with the profile currently being viewed. The selection
+  // below applies only to this upload and never changes the global profile.
   const profilesQuery = trpc.profiles.list.useQuery();
+  const activeProfileQuery = trpc.profiles.active.useQuery();
   const profiles = profilesQuery.data ?? [];
   const [activeProfileId, setActiveProfileId] = useState<string | undefined>(
     undefined,
   );
 
   useEffect(() => {
-    const saved = typeof window !== "undefined"
-      ? localStorage.getItem("hm.activeProfile") ?? undefined
-      : undefined;
-    setActiveProfileId(saved);
-  }, []);
+    setActiveProfileId(getActiveProfileCookie() ?? activeProfileQuery.data?.id);
+  }, [activeProfileQuery.data?.id]);
 
   // 选中项不在列表里时回落到 isDefault 或第一个
   useEffect(() => {
@@ -141,13 +151,11 @@ export default function UploadsPage() {
       profiles.find((p) => p.isDefault)?.id ?? profiles[0]?.id ?? undefined;
     if (fallback) {
       setActiveProfileId(fallback);
-      localStorage.setItem("hm.activeProfile", fallback);
     }
   }, [profiles, activeProfileId]);
 
   const selectProfile = (id: string) => {
     setActiveProfileId(id);
-    localStorage.setItem("hm.activeProfile", id);
   };
 
   const { data: jobsData, isLoading: jobsLoading } =
@@ -193,8 +201,8 @@ export default function UploadsPage() {
   }, []);
 
   const validateFile = useCallback((file: File): string | null => {
-    if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(file.type))
-      return `Unsupported file type: ${file.type}`;
+    if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(uploadMimeType(file)))
+      return `不支持的文件类型：${file.name}`;
     if (file.size > MAX_FILE_SIZE)
       return `File too large: ${(file.size / 1024 / 1024).toFixed(1)}MB (max 50MB)`;
     return null;
@@ -241,12 +249,12 @@ export default function UploadsPage() {
           body: formData,
         });
         if (!res.ok) throw new Error(`Upload failed for ${file.name}`);
-        const { blobPath, contentHash } = await res.json();
+        const { blobPath, contentHash, mimeType } = await res.json();
 
         // Create import job
         const result = await createImport.mutateAsync({
           fileName: file.name,
-          mimeType: file.type,
+          mimeType,
           blobPath,
           contentHash,
           fileSize: file.size,
@@ -270,6 +278,15 @@ export default function UploadsPage() {
       setUploading(false);
     }
   }, [files, createImport, utils, activeProfileId]);
+
+  const selectedProfile = profiles.find((profile) => profile.id === activeProfileId);
+  const requestUploadConfirmation = () => {
+    if (!selectedProfile) {
+      setError("请先选择报告所属的健康档案");
+      return;
+    }
+    setConfirmUpload(true);
+  };
 
   const recentJobs = jobsData?.items ?? [];
 
@@ -368,7 +385,7 @@ export default function UploadsPage() {
           />
         </label>
         <p className="mt-2 text-[11px] text-neutral-400 font-mono">
-          PDF、CSV、JPEG、PNG、JSON — 最大 50MB
+          PDF、Word（.docx）、Markdown、文本、CSV、JPEG、PNG、JSON — 最大 50MB
         </p>
       </div>
 
@@ -403,14 +420,29 @@ export default function UploadsPage() {
             ))}
           </ul>
           <button
-            onClick={handleUpload}
+            onClick={requestUploadConfirmation}
             disabled={uploading}
             className="mt-4 rounded-lg bg-accent-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-accent-700 transition-colors disabled:opacity-50"
           >
             {uploading
               ? "上传中…"
-              : `上传 ${files.length} 个文件`}
+              : `继续：确认归属后上传 ${files.length} 个文件`}
           </button>
+        </div>
+      )}
+
+      {confirmUpload && selectedProfile && (
+        <div className="mt-4 rounded-xl border border-accent-200 bg-accent-50 p-4">
+          <p className="text-sm font-semibold text-neutral-900">确认报告归属</p>
+          <p className="mt-1 text-sm text-neutral-600">
+            本次 {files.length} 个文件将导入至：<span className="font-semibold text-accent-700">{selectedProfile.name}</span>
+            {selectedProfile.isDefault ? "（本人档案）" : "（家庭成员）"}。
+          </p>
+          <p className="mt-1 text-[12px] text-neutral-500">导入后，检验结果、报告和后续分析都会归入该档案。</p>
+          <div className="mt-3 flex gap-2">
+            <button type="button" onClick={() => setConfirmUpload(false)} className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-[13px] font-medium text-neutral-600 hover:bg-neutral-50">返回修改</button>
+            <button type="button" onClick={() => { setConfirmUpload(false); void handleUpload(); }} className="rounded-lg bg-accent-600 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-accent-700">确认并上传</button>
+          </div>
         </div>
       )}
 

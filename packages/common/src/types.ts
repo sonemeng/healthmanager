@@ -1,5 +1,6 @@
 export type ObservationStatus =
   | "extracted"
+  | "flagged"
   | "confirmed"
   | "corrected"
   | "manual"

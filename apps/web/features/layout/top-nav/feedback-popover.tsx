@@ -31,8 +31,8 @@ export function FeedbackPopover() {
   const [rating, setRating] = useState<Rating | null>(null);
 
   const createFeedback = trpc.feedback.create.useMutation({
-    onSuccess: () => {
-      toast.success("感谢你的反馈！");
+    onSuccess: (result) => {
+      toast.success(result.emailDelivered ? "反馈已保存，邮件通知已发送" : "反馈已保存。邮件通知未启用，可在设置中查看配置说明。");
       setMessage("");
       setRating(null);
       setOpen(false);

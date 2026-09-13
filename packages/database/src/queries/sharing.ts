@@ -39,11 +39,13 @@ export async function getActiveGrants(
   db: Database,
   params: {
     userId: string;
+    profileId: string | null;
   },
 ) {
   return db.query.sharePolicies.findMany({
     where: and(
       eq(sharePolicies.userId, params.userId),
+      params.profileId ? eq(sharePolicies.profileId, params.profileId) : isNull(sharePolicies.profileId),
       eq(sharePolicies.isActive, true),
     ),
     with: {

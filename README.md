@@ -1,28 +1,38 @@
 <p align="center">
-  <h1 align="center">OpenVitals</h1>
+  <h1 align="center">HealthManager++</h1>
 </p>
 
 <p align="center">
-  The open-source platform for understanding your health data.
+  Local-first family health records for Windows.
   <br />
-  <a href="https://openvitals.io"><strong>openvitals.io</strong></a> · <a href="https://github.com/zmeyer44/OpenVitals/issues">Issues</a> · <a href="https://github.com/zmeyer44/OpenVitals">GitHub</a>
+  <a href="https://github.com/sonemeng/healthmanager/releases"><strong>Download</strong></a> · <a href="https://github.com/sonemeng/healthmanager/issues">Issues</a> · <a href="https://github.com/sonemeng/healthmanager">GitHub</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/zmeyer44/OpenVitals/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License" /></a>
+  <a href="https://github.com/sonemeng/healthmanager/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License" /></a>
 </p>
 
 <p align="center">
-  <img src="https://openvitals.io/images/landing-page.png" alt="OpenVitals — Understand Your Health Data" width="100%" />
+  <img src="https://openvitals.io/images/landing-page.png" alt="HealthManager++ family health records" width="100%" />
 </p>
 
 <p align="center">⭐ Star this repo to help others discover it</p>
 
 ---
 
-OpenVitals parses, normalizes, and tracks health records from any lab, provider, or format. Upload a PDF from Quest Diagnostics, sync your Whoop, or import a CSV — AI extracts every value, maps it to standard codes, and lets you track trends across years of results. Every observation traces back to its source with full provenance, confidence scoring, and a complete audit trail.
+HealthManager++ parses, normalizes, and tracks family health records from reports, providers, and imported data. Upload a report, record medicines and diagnoses, and review trends across each family member's independent profile. Every observation remains traceable to its source.
 
-Use the hosted version at [openvitals.io](https://openvitals.io), or self-host the entire platform on your own infrastructure.
+## Windows Desktop Release
+
+The GitHub release provides a clean Windows x64 installer. It includes the full application runtime: Next.js UI, background ingestion worker, PostgreSQL, and database migrations. No developer or sample health data is included.
+
+1. Download `HealthManager++-Setup-<version>-x64.exe` from [Releases](https://github.com/sonemeng/healthmanager/releases).
+2. Run the installer and launch HealthManager++.
+3. The application initializes its local database on first launch.
+
+Your local data is stored under `%APPDATA%\@openvitals\desktop\data` and is preserved across application upgrades. Do not publish this directory or the separately generated personal-data backup archive.
+
+See [the v0.1.3 release notes](docs/RELEASE_NOTES_v0.1.3.md) and [project summary](docs/PROJECT_SUMMARY.md).
 
 ## Features
 
