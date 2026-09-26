@@ -55,7 +55,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "HealthManager++-Setup-${version}-${arch}.${ext}"
     },
     "portable": {
       "useZip": true,
