@@ -32,7 +32,7 @@ export function AiChannelsCard() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<ChannelForm>(EMPTY_FORM);
-  const [modelInput, setModelInput] = useState("");
+  const [newModel, setNewModel] = useState("");
   const [fetchingId, setFetchingId] = useState<string | null>(null);
 
   const createMutation = trpc.aiChannels.create.useMutation({
@@ -86,6 +86,23 @@ export function AiChannelsCard() {
     },
     onError: (e) => toast.error(e.message || "保存失败"),
   });
+  const addModelMutation = trpc.aiChannels.addModel.useMutation({
+    onSuccess: (_res, variables) => {
+      toast.success(`已添加模型 ${variables.model}`);
+      setNewModel("");
+      utils.aiChannels.list.invalidate();
+      utils.preferences.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message || "添加失败"),
+  });
+  const removeModelMutation = trpc.aiChannels.removeModel.useMutation({
+    onSuccess: () => {
+      toast.success("已从渠道列表移除");
+      utils.aiChannels.list.invalidate();
+      utils.preferences.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message || "移除失败"),
+  });
 
   const activeChannel = channels.find((c) => c.isActive);
 
@@ -132,12 +149,6 @@ export function AiChannelsCard() {
         protocol: form.protocol,
       });
     }
-  };
-
-  const saveModel = () => {
-    const model = modelInput.trim() || prefsQuery.data?.aiModel;
-    if (!model) return;
-    saveModelMutation.mutate({ aiModel: model });
   };
 
   return (
@@ -208,10 +219,11 @@ export function AiChannelsCard() {
                     fetchModelsMutation.mutate({ id: c.id });
                   }}
                   disabled={fetchingId === c.id}
-                  className="rounded-md p-1.5 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600 disabled:opacity-50 cursor-pointer"
-                  title="拉取模型列表"
+                  className="flex shrink-0 items-center gap-1 rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] font-medium text-neutral-600 transition-colors hover:border-accent-300 hover:text-accent-600 disabled:opacity-50 cursor-pointer"
+                  title="从该渠道拉取模型列表（/v1/models）"
                 >
-                  <RefreshCw className={cn("h-3.5 w-3.5", fetchingId === c.id && "animate-spin")} />
+                  <RefreshCw className={cn("h-3 w-3", fetchingId === c.id && "animate-spin")} />
+                  拉取模型
                 </button>
                 <button
                   onClick={() => startEdit(c)}
@@ -237,43 +249,69 @@ export function AiChannelsCard() {
             {/* 默认模型（仅启用中的渠道） */}
             {c.isActive && (
               <div className="mt-3 border-t border-neutral-100 pt-3">
-                <div className="text-[11px] font-semibold text-neutral-500 mb-1.5">
-                  默认模型
-                </div>
+                <div className="text-[11px] font-semibold text-neutral-500 mb-1.5">默认模型</div>
+
                 {(c.modelsCache?.length ?? 0) > 0 ? (
-                  <select
-                    value={prefsQuery.data?.aiModel ?? ""}
-                    onChange={(e) => saveModelMutation.mutate({ aiModel: e.target.value })}
-                    className={cn(inputClass, "w-full max-w-sm cursor-pointer")}
-                  >
-                    <option value="">选择模型…</option>
-                    {c.modelsCache!.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
                   <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={modelInput || prefsQuery.data?.aiModel || ""}
-                      onChange={(e) => setModelInput(e.target.value)}
-                      placeholder="如 gemini-2.0-flash"
-                      className={cn(inputClass, "w-full max-w-sm")}
-                    />
-                    <button
-                      onClick={saveModel}
-                      disabled={saveModelMutation.isPending}
-                      className="flex items-center gap-1 rounded-lg bg-accent-600 px-3 py-2 text-[12px] font-medium text-white transition-colors hover:bg-accent-700 disabled:opacity-50 cursor-pointer shrink-0"
+                    <select
+                      value={prefsQuery.data?.aiModel ?? ""}
+                      onChange={(e) => saveModelMutation.mutate({ aiModel: e.target.value })}
+                      className={cn(inputClass, "w-full max-w-sm cursor-pointer")}
                     >
-                      <Check className="h-3 w-3" />
-                      保存模型
+                      <option value="">选择模型…</option>
+                      {(prefsQuery.data?.aiModel &&
+                      !(c.modelsCache ?? []).includes(prefsQuery.data.aiModel)
+                        ? [prefsQuery.data.aiModel, ...(c.modelsCache ?? [])]
+                        : (c.modelsCache ?? [])
+                      ).map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => {
+                        const current = prefsQuery.data?.aiModel;
+                        if (!current) return toast.error("先选择一个模型");
+                        removeModelMutation.mutate({ id: c.id, model: current });
+                      }}
+                      disabled={removeModelMutation.isPending}
+                      className="shrink-0 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[12px] font-medium text-neutral-600 transition-colors hover:border-red-200 hover:text-red-500 disabled:opacity-50 cursor-pointer"
+                      title="从渠道列表移除当前选中的模型"
+                    >
+                      移除
                     </button>
                   </div>
+                ) : (
+                  <p className="text-[12px] text-neutral-400">
+                    该渠道还没有模型列表：点上方「拉取模型」，或直接在下面手动添加。
+                  </p>
                 )}
+
+                {/* 手动添加模型：任何情况下都可用（拉不到列表时的兜底） */}
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newModel}
+                    onChange={(e) => setNewModel(e.target.value)}
+                    placeholder="手动添加模型名，如 gemini-2.0-flash"
+                    className={cn(inputClass, "w-full max-w-sm")}
+                  />
+                  <button
+                    onClick={() => {
+                      const model = newModel.trim();
+                      if (!model) return toast.error("请输入模型名");
+                      addModelMutation.mutate({ id: c.id, model, makeDefault: true });
+                    }}
+                    disabled={addModelMutation.isPending}
+                    className="flex shrink-0 items-center gap-1 rounded-lg bg-accent-600 px-3 py-2 text-[12px] font-medium text-white transition-colors hover:bg-accent-700 disabled:opacity-50 cursor-pointer"
+                  >
+                    <Check className="h-3 w-3" />
+                    添加并设为默认
+                  </button>
+                </div>
                 <p className="text-[11px] text-neutral-400 mt-1">
-                  点渠道右侧的刷新图标可拉取模型列表
+                  手动添加的模型会写进该渠道列表并立即成为默认模型；模型名按渠道实际 id 填（如 gpt-4o、claude-sonnet-4-20250514）
                 </p>
               </div>
             )}

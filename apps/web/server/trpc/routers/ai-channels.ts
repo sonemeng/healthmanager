@@ -9,6 +9,47 @@ function maskKey(key: string): string {
   return `****${key.slice(-4)}`;
 }
 
+// ── 模型列表：候选地址 / 请求头 / 响应解析 ──────────────────────────────────
+
+/** 候选地址：中转站基本都要求 /v1/models，但用户可能只填到域名、或已含 /v1 */
+function modelListUrls(baseUrl: string): string[] {
+  const base = baseUrl.trim().replace(/\/+$/, '');
+  const urls = base.endsWith('/v1') ? [`${base}/models`] : [`${base}/v1/models`, `${base}/models`];
+  return [...new Set(urls)];
+}
+
+/** Anthropic 原生只认 x-api-key（并要 anthropic-version）；部分中转站两种都收，所以都带上 */
+function modelListHeaders(apiKey: string, protocol: string): Record<string, string> {
+  if (protocol === 'anthropic')
+    return {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      Authorization: `Bearer ${apiKey}`,
+    };
+  return { Authorization: `Bearer ${apiKey}` };
+}
+
+/** 兼容 {data:[{id}]} / {data:["id"]} / {models:[{name|id}]} / 顶层数组 等形态 */
+function parseModelIds(json: unknown): string[] {
+  const pickId = (v: unknown): string | null => {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (v && typeof v === 'object') {
+      const o = v as Record<string, unknown>;
+      for (const key of ['id', 'name', 'model']) {
+        const cand = o[key];
+        if (typeof cand === 'string' && cand.trim()) return cand.trim();
+      }
+    }
+    return null;
+  };
+  const arr = Array.isArray(json)
+    ? json
+    : Object.values((json ?? {}) as Record<string, unknown>).find((v) => Array.isArray(v));
+  if (!Array.isArray(arr)) return [];
+  const ids = arr.map(pickId).filter((x): x is string => Boolean(x));
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+}
+
 export const aiChannelsRouter = createRouter({
   list: protectedProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db
@@ -148,32 +189,121 @@ export const aiChannelsRouter = createRouter({
 
       if (!channel) throw new Error('渠道不存在');
 
-      const base = channel.baseUrl.replace(/\/+$/, '');
-      try {
-        const res = await fetch(`${base}/models`, {
-          headers: { Authorization: `Bearer ${channel.apiKey}` },
-          signal: AbortSignal.timeout(15000),
-        });
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
+      const urls = modelListUrls(channel.baseUrl);
+      const headers = modelListHeaders(channel.apiKey, channel.protocol);
+      const failures: string[] = [];
+      let models: string[] = [];
+
+      for (const url of urls) {
+        try {
+          const res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
+          const text = await res.text();
+          if (!res.ok) {
+            failures.push(`${url} → HTTP ${res.status} ${text.slice(0, 100).replace(/\s+/g, ' ')}`);
+            continue;
+          }
+          let parsed: unknown = null;
+          try {
+            parsed = JSON.parse(text.replace(/^\uFEFF/, ''));
+          } catch {
+            failures.push(`${url} → 响应不是 JSON`);
+            continue;
+          }
+          const ids = parseModelIds(parsed);
+          if (ids.length === 0) {
+            failures.push(`${url} → 响应里没有模型 id`);
+            continue;
+          }
+          models = ids;
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          failures.push(`${url} → ${msg}`);
         }
-        const json = (await res.json()) as { data?: Array<{ id?: string }> };
-        const models = (json.data ?? [])
-          .map((m) => m.id)
-          .filter((id): id is string => typeof id === 'string' && id.length > 0)
-          .sort();
-
-        await ctx.db
-          .update(aiChannels)
-          .set({ modelsCache: models, updatedAt: new Date() })
-          .where(eq(aiChannels.id, channel.id));
-
-        return { ok: true as const, models };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `拉取模型列表失败：${msg}（确认地址是否以 /v1 结尾且支持 /models 接口）`,
-        );
       }
+
+      if (models.length === 0)
+        throw new Error(
+          `拉取模型列表失败：${failures.join('；')}。（中转站一般把 BaseURL 填成 https://host/v1；也可以直接在「手动添加模型」里输入模型名）`,
+        );
+
+      await ctx.db
+        .update(aiChannels)
+        .set({ modelsCache: models, updatedAt: new Date() })
+        .where(eq(aiChannels.id, channel.id));
+
+      return { ok: true as const, models };
+    }),
+
+  /** 手动往该渠道的模型列表里加一个（默认同时设为默认模型）—— 拉不到列表时的兜底 */
+  addModel: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        model: z.string().min(1).max(100),
+        makeDefault: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const model = input.model.trim();
+      if (!model) throw new Error('模型名不能为空');
+
+      const [channel] = await ctx.db
+        .select()
+        .from(aiChannels)
+        .where(and(eq(aiChannels.id, input.id), eq(aiChannels.userId, ctx.userId)))
+        .limit(1);
+      if (!channel) throw new Error('渠道不存在');
+
+      const current = (channel.modelsCache as string[] | null) ?? [];
+      const models = current.includes(model)
+        ? current
+        : [...current, model].sort((a, b) => a.localeCompare(b));
+
+      await ctx.db
+        .update(aiChannels)
+        .set({ modelsCache: models, updatedAt: new Date() })
+        .where(eq(aiChannels.id, channel.id));
+
+      if (input.makeDefault !== false)
+        await ctx.db
+          .update(users)
+          .set({ aiModel: model, updatedAt: new Date() })
+          .where(eq(users.id, ctx.userId));
+
+      return { ok: true as const, models };
+    }),
+
+  /** 从该渠道的模型列表里移除一个；若它正被用作默认模型，则切到列表第一个 */
+  removeModel: protectedProcedure
+    .input(z.object({ id: z.string().uuid(), model: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const [channel] = await ctx.db
+        .select()
+        .from(aiChannels)
+        .where(and(eq(aiChannels.id, input.id), eq(aiChannels.userId, ctx.userId)))
+        .limit(1);
+      if (!channel) throw new Error('渠道不存在');
+
+      const current = (channel.modelsCache as string[] | null) ?? [];
+      const models = current.filter((m) => m !== input.model);
+
+      await ctx.db
+        .update(aiChannels)
+        .set({ modelsCache: models, updatedAt: new Date() })
+        .where(eq(aiChannels.id, channel.id));
+
+      const [user] = await ctx.db
+        .select({ aiModel: users.aiModel })
+        .from(users)
+        .where(eq(users.id, ctx.userId))
+        .limit(1);
+      if (user?.aiModel === input.model)
+        await ctx.db
+          .update(users)
+          .set({ aiModel: models[0] ?? null, updatedAt: new Date() })
+          .where(eq(users.id, ctx.userId));
+
+      return { ok: true as const, models };
     }),
 });
