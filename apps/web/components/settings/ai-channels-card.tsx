@@ -34,6 +34,9 @@ export function AiChannelsCard() {
   const [form, setForm] = useState<ChannelForm>(EMPTY_FORM);
   const [newModel, setNewModel] = useState("");
   const [fetchingId, setFetchingId] = useState<string | null>(null);
+  const [fetchPool, setFetchPool] = useState<{ channelId: string; list: string[] } | null>(null);
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [modelFilter, setModelFilter] = useState("");
 
   const createMutation = trpc.aiChannels.create.useMutation({
     onSuccess: () => {
@@ -69,8 +72,11 @@ export function AiChannelsCard() {
     onError: (e) => toast.error(e.message || "切换失败"),
   });
   const fetchModelsMutation = trpc.aiChannels.fetchModels.useMutation({
-    onSuccess: (data) => {
-      toast.success(`拉取成功，共 ${data.models.length} 个模型`);
+    onSuccess: (data, variables) => {
+      setFetchPool({ channelId: variables.id, list: data.models });
+      setSelectedModels(new Set(data.models));
+      setModelFilter("");
+      toast.success(`拉取到 ${data.models.length} 个模型，勾选后保存`);
       utils.aiChannels.list.invalidate();
       setFetchingId(null);
     },
@@ -78,6 +84,15 @@ export function AiChannelsCard() {
       toast.error(e.message || "拉取失败");
       setFetchingId(null);
     },
+  });
+  const setModelsMutation = trpc.aiChannels.setModels.useMutation({
+    onSuccess: (_res, variables) => {
+      toast.success(`已保存 ${variables.models.length} 个模型`);
+      setFetchPool(null);
+      utils.aiChannels.list.invalidate();
+      utils.preferences.get.invalidate();
+    },
+    onError: (e) => toast.error(e.message || "保存失败"),
   });
   const saveModelMutation = trpc.preferences.update.useMutation({
     onSuccess: () => {
@@ -103,6 +118,18 @@ export function AiChannelsCard() {
     },
     onError: (e) => toast.error(e.message || "移除失败"),
   });
+  const toggleModel = (model: string) =>
+    setSelectedModels((prev) => {
+      const next = new Set(prev);
+      if (next.has(model)) next.delete(model);
+      else next.add(model);
+      return next;
+    });
+
+  const visiblePoolModels = fetchPool
+    ? fetchPool.list.filter((m) => m.toLowerCase().includes(modelFilter.trim().toLowerCase()))
+    : [];
+
 
   const activeChannel = channels.find((c) => c.isActive);
 
@@ -246,45 +273,67 @@ export function AiChannelsCard() {
               </div>
             </div>
 
-            {/* 默认模型（仅启用中的渠道） */}
+            {/* 模型（仅启用中的渠道）：拉取 → 勾选 → 保存；默认模型自己点 */}
             {c.isActive && (
               <div className="mt-3 border-t border-neutral-100 pt-3">
-                <div className="text-[11px] font-semibold text-neutral-500 mb-1.5">默认模型</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-[11px] font-semibold text-neutral-500">
+                    模型（已保存 {c.modelsCache?.length ?? 0} 个）
+                  </div>
+                  {(c.modelsCache?.length ?? 0) > 0 && (
+                    <span className="text-[11px] text-neutral-400">
+                      点「设为默认」决定解析与分析用哪个模型
+                    </span>
+                  )}
+                </div>
 
                 {(c.modelsCache?.length ?? 0) > 0 ? (
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={prefsQuery.data?.aiModel ?? ""}
-                      onChange={(e) => saveModelMutation.mutate({ aiModel: e.target.value })}
-                      className={cn(inputClass, "w-full max-w-sm cursor-pointer")}
-                    >
-                      <option value="">选择模型…</option>
-                      {(prefsQuery.data?.aiModel &&
-                      !(c.modelsCache ?? []).includes(prefsQuery.data.aiModel)
-                        ? [prefsQuery.data.aiModel, ...(c.modelsCache ?? [])]
-                        : (c.modelsCache ?? [])
-                      ).map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => {
-                        const current = prefsQuery.data?.aiModel;
-                        if (!current) return toast.error("先选择一个模型");
-                        removeModelMutation.mutate({ id: c.id, model: current });
-                      }}
-                      disabled={removeModelMutation.isPending}
-                      className="shrink-0 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[12px] font-medium text-neutral-600 transition-colors hover:border-red-200 hover:text-red-500 disabled:opacity-50 cursor-pointer"
-                      title="从渠道列表移除当前选中的模型"
-                    >
-                      移除
-                    </button>
+                  <div className="mt-1.5 max-h-60 space-y-1 overflow-y-auto pr-1">
+                    {(c.modelsCache ?? []).map((m) => {
+                      const isDefault = (prefsQuery.data?.aiModel ?? "") === m;
+                      return (
+                        <div
+                          key={m}
+                          className={cn(
+                            "flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5",
+                            isDefault
+                              ? "border-accent-300 bg-accent-50/40"
+                              : "border-neutral-200 bg-white",
+                          )}
+                        >
+                          <span className="truncate font-mono text-[12px] text-neutral-700" title={m}>
+                            {m}
+                          </span>
+                          <div className="flex shrink-0 items-center gap-1">
+                            {isDefault ? (
+                              <span className="rounded-full bg-accent-600 px-2 py-0.5 text-[10px] font-medium text-white">
+                                默认中
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => saveModelMutation.mutate({ aiModel: m })}
+                                disabled={saveModelMutation.isPending}
+                                className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] font-medium text-neutral-600 transition-colors hover:border-accent-300 hover:text-accent-600 disabled:opacity-50 cursor-pointer"
+                              >
+                                设为默认
+                              </button>
+                            )}
+                            <button
+                              onClick={() => removeModelMutation.mutate({ id: c.id, model: m })}
+                              disabled={removeModelMutation.isPending}
+                              className="rounded-md p-1 text-neutral-400 transition-colors hover:bg-red-50 hover:text-red-500 disabled:opacity-50 cursor-pointer"
+                              title="从列表移除"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
-                  <p className="text-[12px] text-neutral-400">
-                    该渠道还没有模型列表：点上方「拉取模型」，或直接在下面手动添加。
+                  <p className="mt-1.5 text-[12px] text-neutral-400">
+                    还没有模型：点上方「拉取模型」，或在下面手动添加。
                   </p>
                 )}
 
@@ -310,9 +359,77 @@ export function AiChannelsCard() {
                     添加并设为默认
                   </button>
                 </div>
-                <p className="text-[11px] text-neutral-400 mt-1">
-                  手动添加的模型会写进该渠道列表并立即成为默认模型；模型名按渠道实际 id 填（如 gpt-4o、claude-sonnet-4-20250514）
-                </p>
+
+                {/* 拉取结果：全选 / 勾选 / 过滤 → 保存为渠道模型列表 */}
+                {fetchPool && fetchPool.channelId === c.id && (
+                  <div className="mt-3 rounded-xl border border-accent-200 bg-accent-50/30 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[12px] font-medium text-neutral-700">
+                        拉取到 {fetchPool.list.length} 个 · 已勾选 {selectedModels.size}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setSelectedModels(new Set(fetchPool.list))}
+                          className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] font-medium text-neutral-600 transition-colors hover:border-accent-300 hover:text-accent-600 cursor-pointer"
+                        >
+                          全选
+                        </button>
+                        <button
+                          onClick={() => setSelectedModels(new Set())}
+                          className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] font-medium text-neutral-600 transition-colors hover:border-accent-300 hover:text-accent-600 cursor-pointer"
+                        >
+                          全不选
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="text"
+                      value={modelFilter}
+                      onChange={(e) => setModelFilter(e.target.value)}
+                      placeholder="过滤模型名…（中转站常有几百个）"
+                      className={cn(inputClass, "mt-2 w-full")}
+                    />
+                    <div className="mt-2 max-h-64 space-y-0.5 overflow-y-auto pr-1">
+                      {visiblePoolModels.map((m) => (
+                        <label
+                          key={m}
+                          className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-[12px] transition-colors hover:bg-white"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedModels.has(m)}
+                            onChange={() => toggleModel(m)}
+                            className="h-3.5 w-3.5 accent-accent-600"
+                          />
+                          <span className="truncate font-mono text-neutral-700" title={m}>
+                            {m}
+                          </span>
+                        </label>
+                      ))}
+                      {visiblePoolModels.length === 0 && (
+                        <p className="px-2 py-1 text-[12px] text-neutral-400">没有匹配的模型</p>
+                      )}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        onClick={() =>
+                          setModelsMutation.mutate({ id: c.id, models: [...selectedModels] })
+                        }
+                        disabled={setModelsMutation.isPending || selectedModels.size === 0}
+                        className="flex items-center gap-1 rounded-lg bg-accent-600 px-3 py-2 text-[12px] font-medium text-white transition-colors hover:bg-accent-700 disabled:opacity-50 cursor-pointer"
+                      >
+                        <Check className="h-3 w-3" />
+                        保存勾选的 {selectedModels.size} 个模型
+                      </button>
+                      <button
+                        onClick={() => setFetchPool(null)}
+                        className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[12px] font-medium text-neutral-600 transition-colors hover:bg-neutral-50 cursor-pointer"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

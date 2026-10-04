@@ -306,4 +306,44 @@ export const aiChannelsRouter = createRouter({
 
       return { ok: true as const, models };
     }),
+  /** 用勾选结果整体替换该渠道的模型列表（拉取后筛选用） */
+  setModels: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        models: z.array(z.string().min(1).max(100)).max(2000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [channel] = await ctx.db
+        .select()
+        .from(aiChannels)
+        .where(and(eq(aiChannels.id, input.id), eq(aiChannels.userId, ctx.userId)))
+        .limit(1);
+      if (!channel) throw new Error('渠道不存在');
+
+      const models = [...new Set(input.models.map((m) => m.trim()).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b),
+      );
+
+      await ctx.db
+        .update(aiChannels)
+        .set({ modelsCache: models, updatedAt: new Date() })
+        .where(eq(aiChannels.id, channel.id));
+
+      // 默认模型若不在新列表里 → 切到第一个（或清空）
+      const [user] = await ctx.db
+        .select({ aiModel: users.aiModel })
+        .from(users)
+        .where(eq(users.id, ctx.userId))
+        .limit(1);
+      if (user?.aiModel && !models.includes(user.aiModel))
+        await ctx.db
+          .update(users)
+          .set({ aiModel: models[0] ?? null, updatedAt: new Date() })
+          .where(eq(users.id, ctx.userId));
+
+      return { ok: true as const, models };
+    }),
+
 });
