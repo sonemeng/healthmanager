@@ -53,7 +53,11 @@ const platformTarget = /(?:^|-)(?:darwin|linux|linuxmusl|freebsd|android|win32|a
 function splitPackageName(entry: string): { scope: string; name: string } | undefined {
   const decoded = entry.replace(/\+/g, '/').replace(/@[^/@]*$/, '');
   const parts = decoded.split('/').filter(Boolean);
-  return parts.length === 2 ? { scope: parts[0], name: parts[1] } : undefined;
+  const scope = parts[0];
+  const name = parts[1];
+  return parts.length === 2 && scope !== undefined && name !== undefined
+    ? { scope, name }
+    : undefined;
 }
 
 /**
