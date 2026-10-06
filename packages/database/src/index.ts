@@ -26,6 +26,7 @@ export {
   listImportJobs,
   deleteImportJob,
   getReviewQueue,
+  getImportJobArtifact,
   resetImportJobsForReprocessing,
   findImportJobByContentHash,
   resetImportJob,

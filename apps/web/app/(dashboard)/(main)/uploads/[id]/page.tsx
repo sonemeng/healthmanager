@@ -15,6 +15,9 @@ import {
   CheckCheck,
   FileText,
   AlertTriangle,
+  CalendarClock,
+  ChevronDown,
+  Image as ImageIcon,
   Pencil,
   RefreshCw,
 } from "lucide-react";
@@ -75,6 +78,10 @@ export default function ImportJobDetailPage({
   const reprocessMutation = trpc.importJobs.reprocess.useMutation({
     onSuccess: () => utils.importJobs.getDetail.invalidate({ id }),
   });
+  const correctDateMutation = trpc.importJobs.correctDate.useMutation({
+    onSuccess: () => utils.importJobs.getDetail.invalidate({ id }),
+  });
+  const [showDateCorrection, setShowDateCorrection] = useState(false);
   const resolveCandidateMutation = trpc.importJobs.resolveCandidate.useMutation({
     onSuccess: () => {
       utils.importJobs.getDetail.invalidate({ id });
@@ -99,13 +106,16 @@ export default function ImportJobDetailPage({
 
   const stats = useMemo(() => {
     if (!detailObservations)
-      return { total: 0, abnormal: 0, confirmed: 0, pending: 0 };
+      return { total: 0, abnormal: 0, confirmed: 0, pending: 0, fallbackDates: 0 };
     const total = detailObservations.length;
     const abnormal = detailObservations.filter((o) => o.isAbnormal).length;
     const confirmed = detailObservations.filter(
       (o) => o.status === "confirmed" || o.status === "corrected",
     ).length;
-    return { total, abnormal, confirmed, pending: total - confirmed };
+    const fallbackDates = detailObservations.filter(
+      (o) => o.observedAtIsFallback,
+    ).length;
+    return { total, abnormal, confirmed, pending: total - confirmed, fallbackDates };
   }, [detailObservations]);
 
   if (isLoading) {
@@ -136,10 +146,23 @@ export default function ImportJobDetailPage({
     );
   }
 
-  const { job, observations } = data;
+  const { job, observations, artifact } = data;
   const candidates = getPendingCandidates(job.errorDetailJson);
   const jobStatus =
     IMPORT_JOB_STATUS_MAP[job.status] ?? IMPORT_JOB_STATUS_MAP.completed!;
+  const defaultObservedDate = (() => {
+    const preferred =
+      observations.find((o) => o.observedAt != null && !o.observedAtIsFallback) ??
+      observations.find((o) => o.observedAt != null);
+    const raw = preferred?.observedAt;
+    if (!raw) return "";
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return "";
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  })();
 
   const confirmAll = () => {
     observations
@@ -178,6 +201,20 @@ export default function ImportJobDetailPage({
                 全部确认（{stats.pending}）
               </button>
             )}
+            {observations.length > 0 && (
+              <button
+                onClick={() => setShowDateCorrection((v) => !v)}
+                className={cn(
+                  "flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2.5 text-sm font-medium shadow-xs transition-colors",
+                  showDateCorrection
+                    ? "border-accent-300 text-accent-600"
+                    : "text-neutral-600 hover:border-accent-300 hover:text-accent-600",
+                )}
+              >
+                <CalendarClock className="h-4 w-4" />
+                修改检查日期
+              </button>
+            )}
             <button
               onClick={() => reprocessMutation.mutate({ id })}
               disabled={reprocessMutation.isPending}
@@ -189,6 +226,32 @@ export default function ImportJobDetailPage({
           </>
         }
       />
+
+      {/* 通用入口：修改本次导入的检查日期 */}
+      {showDateCorrection && observations.length > 0 && (
+        <div className="mt-6 rounded-xl border border-neutral-200 bg-white p-4">
+          <div className="flex items-start gap-3">
+            <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-neutral-900">
+                修改本次导入的检查日期
+              </p>
+              <p className="mt-0.5 text-[12px] text-neutral-500">
+                将应用到本次导入的全部 {observations.length} 条记录，并清除「日期未知」标记。
+              </p>
+              <CorrectDateForm
+                defaultDate={defaultObservedDate}
+                isPending={correctDateMutation.isPending}
+                submitLabel="保存为本次检查日期"
+                onSubmit={(date) => {
+                  correctDateMutation.mutate({ id, observedAt: date });
+                  setShowDateCorrection(false);
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -219,6 +282,28 @@ export default function ImportJobDetailPage({
         </div>
       )}
 
+      {/* 日期待定提示 + 批量补录检查日期 */}
+      {stats.fallbackDates > 0 && (
+        <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="flex items-start gap-3">
+            <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-amber-900">
+                {stats.fallbackDates} 条记录的检查日期未知
+              </p>
+              <p className="mt-0.5 text-[12px] text-amber-700">
+                原报告中未识别出检查日期，这些记录暂用上传时间占位。补录后按检查时间正确归档。
+              </p>
+            </div>
+          </div>
+          <CorrectDateForm
+            defaultDate=""
+            isPending={correctDateMutation.isPending}
+            onSubmit={(date) => correctDateMutation.mutate({ id, observedAt: date })}
+          />
+        </div>
+      )}
+
       {candidates.length > 0 && (
         <section className="mt-8">
           <div className="mb-2.5 flex items-center gap-2.5">
@@ -229,6 +314,11 @@ export default function ImportJobDetailPage({
             {candidates.map((candidate) => <PendingCandidateRow key={candidate.id} candidate={candidate} isPending={resolveCandidateMutation.isPending} onResolve={(action, updates) => resolveCandidateMutation.mutate({ id, candidateId: candidate.id, action, updates })} />)}
           </div>
         </section>
+      )}
+
+      {/* 解析透明度：原图对照 + 原始提取文本 */}
+      {artifact && (
+        <TransparencyPanel artifact={artifact} />
       )}
 
       {/* Observations by category */}
@@ -326,6 +416,145 @@ function SummaryCard({
 
 const inputClass =
   "rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[13px] text-neutral-900 placeholder:text-neutral-400 focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100 transition-all";
+
+// ── 解析透明度面板：原图对照 + 原始提取文本 ─────────────────────────────────
+
+function TransparencyPanel({
+  artifact,
+}: {
+  artifact: {
+    sourceArtifactId: string;
+    fileName: string;
+    mimeType: string;
+    fileSize: number | null;
+    rawTextExtracted: string | null;
+  };
+}) {
+  const [showImage, setShowImage] = useState(false);
+  const [showRawText, setShowRawText] = useState(false);
+  const isImage = artifact.mimeType.startsWith("image/");
+
+  return (
+    <section className="mt-8">
+      <div className="mb-2.5 flex items-center gap-2.5">
+        <h2 className="text-sm font-semibold text-neutral-700 font-body">解析原文</h2>
+        <span className="text-[11px] text-neutral-400 font-mono">
+          {artifact.fileName} · {artifact.mimeType}
+          {artifact.fileSize ? ` · ${(artifact.fileSize / 1024).toFixed(0)} KB` : ""}
+        </span>
+      </div>
+
+      <div className="card divide-y divide-neutral-100">
+        {/* 原图对照 */}
+        <div>
+          <button
+            onClick={() => setShowImage(!showImage)}
+            className="flex w-full items-center justify-between px-5 py-3.5 text-left transition-colors hover:bg-neutral-50"
+          >
+            <span className="flex items-center gap-2 text-[13px] font-medium text-neutral-900">
+              <ImageIcon className="h-3.5 w-3.5 text-neutral-400" />
+              原图对照
+            </span>
+            <ChevronDown
+              className={cn(
+                "h-3.5 w-3.5 text-neutral-400 transition-transform",
+                showImage && "rotate-180",
+              )}
+            />
+          </button>
+          {showImage && (
+            <div className="border-t border-neutral-100 bg-neutral-50/60 p-4">
+              {isImage ? (
+                <img
+                  src={`/api/artifacts/${artifact.sourceArtifactId}`}
+                  alt={artifact.fileName}
+                  className="mx-auto max-h-[600px] rounded-lg border border-neutral-200 bg-white object-contain"
+                  loading="lazy"
+                />
+              ) : (
+                <p className="py-2 text-center text-xs text-neutral-400">
+                  该文件不是图片（{artifact.mimeType}），无原图可对照。
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* 原始提取文本 */}
+        <div>
+          <button
+            onClick={() => setShowRawText(!showRawText)}
+            className="flex w-full items-center justify-between px-5 py-3.5 text-left transition-colors hover:bg-neutral-50"
+          >
+            <span className="flex items-center gap-2 text-[13px] font-medium text-neutral-900">
+              <FileText className="h-3.5 w-3.5 text-neutral-400" />
+              原始提取文本
+            </span>
+            <ChevronDown
+              className={cn(
+                "h-3.5 w-3.5 text-neutral-400 transition-transform",
+                showRawText && "rotate-180",
+              )}
+            />
+          </button>
+          {showRawText && (
+            <div className="border-t border-neutral-100 bg-neutral-50/60 p-4">
+              {artifact.rawTextExtracted ? (
+                <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-white p-3 text-[12px] leading-relaxed text-neutral-700 font-mono">
+                  {artifact.rawTextExtracted}
+                </pre>
+              ) : (
+                <p className="py-2 text-center text-xs text-neutral-400">
+                  {isImage
+                    ? "图片类文件无文本层，解析器直接读取图像内容。"
+                    : "该文件未提取到文本内容。"}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ── 批量补录检查日期表单 ───────────────────────────────────────────────────
+
+function CorrectDateForm({
+  defaultDate,
+  isPending,
+  onSubmit,
+  submitLabel = "补录为本次检查日期",
+}: {
+  defaultDate: string;
+  isPending: boolean;
+  onSubmit: (date: string) => void;
+  submitLabel?: string;
+}) {
+  const [date, setDate] = useState(defaultDate);
+  return (
+    <div className="mt-3 flex flex-wrap items-end gap-3">
+      <label className="flex flex-col gap-1">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-amber-600 font-mono">
+          本次检查日期
+        </span>
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-[13px] text-neutral-900 focus:border-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-100"
+        />
+      </label>
+      <button
+        onClick={() => date && onSubmit(date)}
+        disabled={isPending || !date}
+        className="rounded-lg bg-amber-600 px-4 py-2 text-[13px] font-medium text-white shadow-sm transition-colors hover:bg-amber-700 disabled:opacity-50"
+      >
+        {isPending ? "保存中…" : submitLabel}
+      </button>
+    </div>
+  );
+}
 
 const gridCols = "grid-cols-[1.6fr_0.8fr_0.8fr_1fr_0.8fr_100px]";
 

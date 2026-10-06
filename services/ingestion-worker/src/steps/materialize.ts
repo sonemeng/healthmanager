@@ -39,6 +39,7 @@ export async function materialize(
       status: 'extracted' as const,
       confidenceScore: obs.confidenceScore,
       observedAt: obs.observedAt,
+      observedAtIsFallback: obs.observedAtIsFallback ?? false,
       sourceArtifactId: ctx.artifactId,
       importJobId: ctx.importJobId,
       // AI 识别的原始项目名，界面显示优先用它
@@ -80,7 +81,9 @@ export async function materialize(
       referenceRangeText: f.extraction.referenceRangeText,
       isAbnormal: f.extraction.isAbnormal,
       status: 'flagged' as const,
+      // 无日期时用当前时刻占位并标记 fallback（不再冒充检查时刻）
       observedAt: f.extraction.observedAt ? new Date(f.extraction.observedAt) : new Date(),
+      observedAtIsFallback: !f.extraction.observedAt,
       sourceArtifactId: ctx.artifactId,
       importJobId: ctx.importJobId,
       // ★ AI 识别的原始项目名

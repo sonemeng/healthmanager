@@ -9,7 +9,7 @@ export interface RawExtraction {
   referenceRangeHigh: number | null;
   referenceRangeText: string | null;
   isAbnormal: boolean | null;
-  observedAt: string; // ISO date
+  observedAt: string | null; // ISO date; null when the source has no usable date
   category?: DataCategory;
   metadata?: Record<string, unknown>;
 }
@@ -31,6 +31,7 @@ export interface NormalizedObservation {
   referenceRangeText: string | null;
   isAbnormal: boolean | null;
   observedAt: Date;
+  observedAtIsFallback?: boolean;
   confidenceScore: number;
   loincCode?: string;
   snomedCode?: string;

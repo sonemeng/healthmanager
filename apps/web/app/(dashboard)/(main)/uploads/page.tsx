@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE } from "@openvitals/common";
 import { trpc } from "@/lib/trpc/client";
 import { TitleActionHeader } from "@/components/title-action-header";
@@ -8,6 +8,7 @@ import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { StatusBadge } from "@/components/health/status-badge";
 import { AnimatedEmptyState } from "@/components/animated-empty-state";
 import { formatRelativeTime } from "@/lib/health-utils";
+import { cn, formatDate } from "@/lib/utils";
 import { DOC_TYPE_LABELS, IMPORT_JOB_STATUS_MAP } from "@/lib/constants";
 import {
   FileText,
@@ -44,6 +45,11 @@ type ImportJob = {
   fileName: string;
   mimeType: string;
   fileSize: number | null;
+  batchId: string | null;
+  observationCount: number | null;
+  abnormalCount: number | null;
+  minObservedAt: Date | string | null;
+  hasFallbackDate: boolean | null;
 };
 
 function uploadMimeType(file: File) {
@@ -65,8 +71,28 @@ const importColumns: DataTableColumn<ImportJob>[] = [
         <div className="text-sm font-medium text-neutral-900 font-body">
           {job.fileName}
         </div>
-        <div className="mt-0.5 text-[11px] text-neutral-400 font-mono">
-          {job.createdAt ? formatRelativeTime(job.createdAt) : "—"}
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
+          {job.minObservedAt && !job.hasFallbackDate ? (
+            <span className="text-neutral-500">
+              {formatDate(job.minObservedAt)}
+            </span>
+          ) : job.minObservedAt ? (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+              日期未知
+            </span>
+          ) : null}
+          <span className="text-neutral-300">·</span>
+          <span className="text-neutral-400">
+            {job.createdAt ? formatRelativeTime(job.createdAt) : "—"}
+          </span>
+          {job.batchId && (
+            <span
+              className="rounded-full bg-accent-50 px-2 py-0.5 text-[10px] text-accent-700"
+              title={`同一批次上传（${job.batchId.slice(0, 8)}）`}
+            >
+              同批
+            </span>
+          )}
         </div>
       </div>
     ),
@@ -106,15 +132,22 @@ const importColumns: DataTableColumn<ImportJob>[] = [
   {
     id: "extracted",
     header: "提取结果",
-    width: "0.8fr",
+    width: "1fr",
     align: "right",
-    cell: (job) => (
-      <span className="text-[13px] font-semibold text-accent-600 font-mono">
-        {job.extractionCount != null
-          ? `${job.extractionCount} 条记录`
-          : "— 条记录"}
-      </span>
-    ),
+    cell: (job) => {
+      if (job.observationCount == null || job.observationCount === 0)
+        return <span className="text-[13px] text-neutral-400 font-mono">—</span>;
+      return (
+        <span className="text-[13px] font-semibold text-accent-600 font-mono">
+          {job.observationCount} 项
+          {job.abnormalCount != null && job.abnormalCount > 0 && (
+            <span className="text-[var(--color-health-warning)]">
+              {" "}· {job.abnormalCount} 异常
+            </span>
+          )}
+        </span>
+      );
+    },
   },
 ];
 
@@ -129,6 +162,8 @@ export default function UploadsPage() {
   } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [confirmUpload, setConfirmUpload] = useState(false);
+  const [sortBy, setSortBy] = useState<"createdAt" | "observedAt">("createdAt");
+  const [joinBatchId, setJoinBatchId] = useState("");
 
   // Each import begins with the profile currently being viewed. The selection
   // below applies only to this upload and never changes the global profile.
@@ -160,7 +195,7 @@ export default function UploadsPage() {
 
   const { data: jobsData, isLoading: jobsLoading } =
     trpc.importJobs.list.useQuery(
-      { limit: 20 },
+      { limit: 20, sortBy },
       {
         refetchInterval: (query) => {
           const items = query.state.data?.items;
@@ -240,6 +275,7 @@ export default function UploadsPage() {
     setError("");
     setDuplicateJob(null);
     try {
+    const batchId = joinBatchId || crypto.randomUUID();
       for (const file of files) {
         // Upload to blob storage first
         const formData = new FormData();
@@ -259,6 +295,7 @@ export default function UploadsPage() {
           contentHash,
           fileSize: file.size,
           profileId: activeProfileId || undefined,
+          batchId,
         });
 
         if (result.duplicate) {
@@ -271,13 +308,14 @@ export default function UploadsPage() {
         }
       }
       setFiles([]);
+      setJoinBatchId("");
       utils.importJobs.list.invalidate();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
     }
-  }, [files, createImport, utils, activeProfileId]);
+  }, [files, createImport, utils, activeProfileId, joinBatchId]);
 
   const selectedProfile = profiles.find((profile) => profile.id === activeProfileId);
   const requestUploadConfirmation = () => {
@@ -289,6 +327,18 @@ export default function UploadsPage() {
   };
 
   const recentJobs = jobsData?.items ?? [];
+  const recentBatches = useMemo(() => {
+    const map = new Map<string, { batchId: string; label: string }>();
+    for (const job of recentJobs) {
+      if (!job.batchId || map.has(job.batchId)) continue;
+      const count = recentJobs.filter((j) => j.batchId === job.batchId).length;
+      map.set(job.batchId, {
+        batchId: job.batchId,
+        label: `${job.fileName}${count > 1 ? ` 等 ${count} 个文件` : ""}`,
+      });
+    }
+    return Array.from(map.values()).slice(0, 10);
+  }, [recentJobs]);
 
   return (
     <div>
@@ -439,6 +489,27 @@ export default function UploadsPage() {
             {selectedProfile.isDefault ? "（本人档案）" : "（家庭成员）"}。
           </p>
           <p className="mt-1 text-[12px] text-neutral-500">导入后，检验结果、报告和后续分析都会归入该档案。</p>
+
+          {recentBatches.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-neutral-600">批次归组：</span>
+              <select
+                value={joinBatchId}
+                onChange={(e) => setJoinBatchId(e.target.value)}
+                className="cursor-pointer rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-[13px] text-neutral-900 focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100"
+              >
+                <option value="">创建新批次（默认）</option>
+                {recentBatches.map((b) => (
+                  <option key={b.batchId} value={b.batchId}>
+                    {b.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-[12px] text-neutral-400">
+                同一批次的文件视为一次体检的多份报告
+              </span>
+            </div>
+          )}
           <div className="mt-3 flex gap-2">
             <button type="button" onClick={() => setConfirmUpload(false)} className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-[13px] font-medium text-neutral-600 hover:bg-neutral-50">返回修改</button>
             <button type="button" onClick={() => { setConfirmUpload(false); void handleUpload(); }} className="rounded-lg bg-accent-600 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-accent-700">确认并上传</button>
@@ -448,9 +519,32 @@ export default function UploadsPage() {
 
       {/* Recent imports */}
       <div className="mt-10">
-        <h2 className="mb-4 text-lg font-medium tracking-[-0.015em] text-neutral-900 font-display">
-          最近导入
-        </h2>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-medium tracking-[-0.015em] text-neutral-900 font-display">
+            最近导入
+          </h2>
+          <div className="flex items-center gap-0.5 rounded-lg border border-neutral-200 bg-white p-0.5">
+            {(
+              [
+                { value: "createdAt", label: "按上传时间" },
+                { value: "observedAt", label: "按检查时间" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setSortBy(opt.value)}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                  sortBy === opt.value
+                    ? "bg-accent-600 text-white"
+                    : "text-neutral-500 hover:bg-neutral-100",
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
         {recentJobs.length === 0 && !jobsLoading ? (
           <AnimatedEmptyState
             title="暂无上传记录"

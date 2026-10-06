@@ -5,6 +5,7 @@ import { createRouter, protectedProcedure } from "../init";
 import {
   createImportJob,
   getImportJobStatus,
+  getImportJobArtifact,
   listImportJobs,
   deleteImportJob,
   getReviewQueue,
@@ -18,6 +19,7 @@ import {
   encounters,
   sourceArtifacts,
   profiles,
+  observations,
   type Database,
 } from "@openvitals/database";
 import { getActiveProfileId } from "../active-profile";
@@ -121,6 +123,7 @@ export const importJobsRouter = createRouter({
         fileSize: z.number(),
         dataSourceId: z.string().uuid().optional(),
         profileId: z.string().uuid().optional(),
+        batchId: z.string().min(1).max(100).optional(),
         documentType: z.enum(["encounter_note", "imaging_report", "dental_record", "immunization_record"]).optional(),
         importTarget: z.enum(["medication", "condition", "encounter"]).optional(),
       }),
@@ -170,6 +173,7 @@ export const importJobsRouter = createRouter({
         contentHash: input.contentHash,
         fileSize: input.fileSize,
         dataSourceId: input.dataSourceId,
+        batchId: input.batchId ?? null,
       });
 
       // Module-specific imports intentionally bypass generic classification.
@@ -224,6 +228,7 @@ export const importJobsRouter = createRouter({
       z.object({
         limit: z.number().min(1).max(50).default(20),
         status: z.string().optional(),
+        sortBy: z.enum(["createdAt", "observedAt"]).default("createdAt"),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -233,6 +238,7 @@ export const importJobsRouter = createRouter({
         profileId,
         limit: input.limit,
         status: input.status,
+        sortBy: input.sortBy,
       });
       return { items };
     }),
@@ -279,7 +285,60 @@ export const importJobsRouter = createRouter({
         importJobId: input.id,
         userId: ctx.userId,
       });
-      return { job, observations };
+      // 透明度：原始文件元信息（原图对照 / 提取文本面板用）
+      const artifact = await getImportJobArtifact(ctx.db, {
+        id: input.id,
+        userId: ctx.userId,
+      });
+      return { job, observations, artifact };
+    }),
+
+  // 按本次导入（importJob）批量修正检查日期，并清除「日期未知」占位标记
+  correctDate: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        observedAt: z.string().refine((value) => !Number.isNaN(new Date(value).getTime()), {
+          message: "无效的日期",
+        }),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const job = await getImportJobStatus(ctx.db, {
+        id: input.id,
+        userId: ctx.userId,
+      });
+      if (!job) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Import job not found",
+        });
+      }
+
+      const observedAt = new Date(input.observedAt);
+      if (observedAt.getTime() > Date.now() + 24 * 60 * 60 * 1000) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "检查日期不能晚于当前时间",
+        });
+      }
+
+      const updated = await ctx.db
+        .update(observations)
+        .set({
+          observedAt,
+          observedAtIsFallback: false,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(observations.importJobId, input.id),
+            eq(observations.userId, ctx.userId),
+          ),
+        )
+        .returning({ id: observations.id });
+
+      return { updatedCount: updated.length };
     }),
 
   resolveCandidate: protectedProcedure

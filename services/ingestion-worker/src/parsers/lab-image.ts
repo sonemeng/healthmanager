@@ -93,7 +93,7 @@ export async function parseLabImage(ctx: WorkflowContext): Promise<ParseResult> 
   const missingDateCount = rows.filter((r) => !r.observedAt && !fallbackDate).length;
 
   const extractions: RawExtraction[] = rows
-    .filter((r) => (r.observedAt || fallbackDate) && r.analyte && String(r.analyte).trim().length > 0)
+    .filter((r) => r.analyte && String(r.analyte).trim().length > 0)
     .map((r) => ({
       analyte: String(r.analyte).trim(),
       value: typeof r.value === 'number' ? r.value : null,
@@ -103,7 +103,8 @@ export async function parseLabImage(ctx: WorkflowContext): Promise<ParseResult> 
       referenceRangeHigh: typeof r.referenceRangeHigh === 'number' ? r.referenceRangeHigh : null,
       referenceRangeText: r.referenceRangeText ?? null,
       isAbnormal: typeof r.isAbnormal === 'boolean' ? r.isAbnormal : null,
-      observedAt: r.observedAt ?? fallbackDate,
+      // 无日期行不再丢弃：observedAt 允许为 null，落库时标记「日期未知」
+      observedAt: r.observedAt ?? fallbackDate ?? null,
       category: 'lab_result' as const,
     }));
 

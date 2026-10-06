@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { sourceArtifacts, importJobs } from "../schema/sources";
 import { observations } from "../schema/observations";
 import type { Database } from "../client";
@@ -14,6 +14,7 @@ export async function createImportJob(
     contentHash: string;
     fileSize: number;
     dataSourceId?: string;
+    batchId?: string | null;
   },
 ) {
   return db.transaction(async (tx) => {
@@ -36,12 +37,40 @@ export async function createImportJob(
         userId: params.userId,
         profileId: params.profileId ?? null,
         sourceArtifactId: artifact!.id,
+        batchId: params.batchId ?? null,
         status: "pending",
       })
       .returning();
 
     return { importJobId: job!.id, sourceArtifactId: artifact!.id };
   });
+}
+
+// 详情页「原图对照 / 原始提取文本」需要 artifact 元信息
+export async function getImportJobArtifact(
+  db: Database,
+  params: { id: string; userId: string },
+) {
+  const rows = await db
+    .select({
+      sourceArtifactId: sourceArtifacts.id,
+      fileName: sourceArtifacts.fileName,
+      mimeType: sourceArtifacts.mimeType,
+      fileSize: sourceArtifacts.fileSize,
+      rawTextExtracted: sourceArtifacts.rawTextExtracted,
+      blobPath: sourceArtifacts.blobPath,
+    })
+    .from(importJobs)
+    .innerJoin(
+      sourceArtifacts,
+      eq(importJobs.sourceArtifactId, sourceArtifacts.id),
+    )
+    .where(
+      and(eq(importJobs.id, params.id), eq(importJobs.userId, params.userId)),
+    )
+    .limit(1);
+
+  return rows[0] ?? null;
 }
 
 export async function getImportJobStatus(
@@ -69,11 +98,19 @@ export async function listImportJobs(
     profileId?: string | null;
     limit?: number;
     status?: string;
+    sortBy?: "createdAt" | "observedAt";
   },
 ) {
   const conditions: SQL[] = [eq(importJobs.userId, params.userId)];
   if (params.profileId) conditions.push(eq(importJobs.profileId, params.profileId));
   if (params.status) conditions.push(eq(importJobs.status, params.status));
+
+  // 按检查时间排序时，无任何观测的 job 排最后（NULLS LAST）
+  const minObservedAt = sql<Date | null>`(
+    SELECT MIN(${observations.observedAt})
+    FROM ${observations}
+    WHERE ${observations.importJobId} = ${importJobs.id}
+  )`;
 
   return db
     .select({
@@ -90,6 +127,27 @@ export async function listImportJobs(
       fileName: sourceArtifacts.fileName,
       mimeType: sourceArtifacts.mimeType,
       fileSize: sourceArtifacts.fileSize,
+      batchId: importJobs.batchId,
+      observationCount: sql<number | null>`(
+        SELECT COUNT(*)::int
+        FROM ${observations}
+        WHERE ${observations.importJobId} = ${importJobs.id}
+      )`,
+      abnormalCount: sql<number | null>`(
+        SELECT COUNT(*)::int
+        FROM ${observations}
+        WHERE ${observations.importJobId} = ${importJobs.id}
+          AND ${observations.isAbnormal} = true
+      )`,
+      minObservedAt,
+      hasFallbackDate: sql<boolean | null>`(
+        SELECT EXISTS (
+          SELECT 1
+          FROM ${observations}
+          WHERE ${observations.importJobId} = ${importJobs.id}
+            AND ${observations.observedAtIsFallback} = true
+        )
+      )`,
     })
     .from(importJobs)
     .innerJoin(
@@ -97,7 +155,11 @@ export async function listImportJobs(
       eq(importJobs.sourceArtifactId, sourceArtifacts.id),
     )
     .where(and(...conditions))
-    .orderBy(desc(importJobs.createdAt))
+    .orderBy(
+      params.sortBy === "observedAt"
+        ? sql`${minObservedAt} DESC NULLS LAST`
+        : desc(importJobs.createdAt),
+    )
     .limit(params.limit ?? 20);
 }
 

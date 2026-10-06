@@ -78,6 +78,8 @@ export const importJobs = pgTable('import_jobs', {
   classificationConfidence: real('classification_confidence'),
   parserId: varchar('parser_id', { length: 100 }),
   parserVersion: varchar('parser_version', { length: 20 }),
+  // 多文件同一次体检的归组 id（客户端生成 UUID，同批次共享）
+  batchId: text('batch_id'),
   extractionCount: integer('extraction_count').default(0),
   needsReview: boolean('needs_review').default(false),
   errorMessage: text('error_message'),

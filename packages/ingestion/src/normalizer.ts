@@ -259,7 +259,9 @@ export function normalizeExtractions(
       referenceRangeHigh: refHigh,
       referenceRangeText: extraction.referenceRangeText,
       isAbnormal,
-      observedAt: new Date(extraction.observedAt),
+      // 无日期行不再丢弃：用当前时刻占位并标记 fallback，落库后 UI 显示「日期未知」
+      observedAt: extraction.observedAt ? new Date(extraction.observedAt) : new Date(),
+      observedAtIsFallback: !extraction.observedAt,
       confidenceScore: baseConfidence,
       analyte: extraction.analyte,
     };

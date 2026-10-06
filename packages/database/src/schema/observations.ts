@@ -38,6 +38,8 @@ export const observations = pgTable(
     status: varchar('status', { length: 20 }).notNull().default('extracted'),
     confidenceScore: real('confidence_score'),
     observedAt: timestamp('observed_at').notNull(),
+    // true = observedAt 是落库时占位（源数据无日期），UI 应显示「日期未知」
+    observedAtIsFallback: boolean('observed_at_is_fallback').notNull().default(false),
     reportedAt: timestamp('reported_at'),
     dataSourceId: uuid('data_source_id').references(() => dataSources.id),
     sourceArtifactId: uuid('source_artifact_id').references(
