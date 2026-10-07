@@ -96,6 +96,9 @@ export async function parseLabImage(ctx: WorkflowContext): Promise<ParseResult> 
     .filter((r) => r.analyte && String(r.analyte).trim().length > 0)
     .map((r) => ({
       analyte: String(r.analyte).trim(),
+      // C2 溯源：从项目名剥离的括号内容 / 检验结果互认标识（不参与匹配）
+      analyteNote: r.analyteNote != null ? String(r.analyteNote) : undefined,
+      interopMark: r.interopMark != null ? String(r.interopMark) : undefined,
       value: typeof r.value === 'number' ? r.value : null,
       valueText: r.valueText ?? (r.value != null ? String(r.value) : null),
       unit: r.unit ?? null,

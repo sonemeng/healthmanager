@@ -9,7 +9,7 @@ import {
 } from "@/components/health/status-badge";
 import { MetricSummaryCard } from "@/components/health/metric-summary-card";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
-import { deriveStatus, formatRange } from "@/lib/health-utils";
+import { deriveStatus, deriveDirection, getAbnormalityLabel, formatRange } from "@/lib/health-utils";
 import {
   cn,
   formatDate,
@@ -188,11 +188,9 @@ export default function IntegrationDetailPage({
           latest,
           status,
           statusLabel:
-            status === "critical"
-              ? "偏高"
-              : status === "warning"
-                ? "异常"
-                : "正常",
+            status === "normal"
+              ? "正常"
+              : getAbnormalityLabel(status, deriveDirection(latest)),
           resultCount: items.length,
           sparkData,
           referenceRange: formatRange(

@@ -27,6 +27,41 @@ export function deriveStatus(obs: {
   return "normal";
 }
 
+export type AbnormalityDirection = "high" | "low" | null;
+
+/**
+ * 由观测值 + 参考区间推导异常方向。
+ * 无区间时方向未知（返回 null，文案退化为「异常」）——不再一律显示「偏高」。
+ */
+export function deriveDirection(obs: {
+  valueNumeric?: number | null;
+  referenceRangeLow?: number | null;
+  referenceRangeHigh?: number | null;
+  isAbnormal?: boolean | null;
+}): AbnormalityDirection {
+  if (obs.valueNumeric == null) return null;
+  const low = obs.referenceRangeLow ?? null;
+  const high = obs.referenceRangeHigh ?? null;
+  if (high != null && obs.valueNumeric > high) return "high";
+  if (low != null && obs.valueNumeric < low) return "low";
+  return null;
+}
+
+/**
+ * 统一异常/方向文案（替换各处写死的「偏高」）。
+ *  critical + high → 严重偏高；critical + low → 严重偏低；
+ *  warning  + high → 偏高；    warning  + low → 偏低；
+ *  方向未知（null） → 异常
+ */
+export function getAbnormalityLabel(
+  level: "critical" | "warning" | string | null | undefined,
+  direction: AbnormalityDirection,
+): string {
+  if (direction === "high") return level === "critical" ? "严重偏高" : "偏高";
+  if (direction === "low") return level === "critical" ? "严重偏低" : "偏低";
+  return "异常";
+}
+
 export function formatRelativeTime(date: Date | string): string {
   const now = Date.now();
   const then =

@@ -5,7 +5,7 @@ import { TitleActionHeader } from '@/components/title-action-header';
 import { MetricCard } from '@/components/health/metric-card';
 import { MetricSummaryCard } from '@/components/health/metric-summary-card';
 import { AnimatedEmptyState } from '@/components/animated-empty-state';
-import { deriveStatus, formatRange } from '@/lib/health-utils';
+import { deriveStatus, deriveDirection, getAbnormalityLabel, formatRange } from '@/lib/health-utils';
 import { formatDate, formatObsValue, isDurationMetric } from '@/lib/utils';
 import { TestTubes, Droplets, Activity, Microscope, FlaskConical, Dna, Download } from 'lucide-react';
 import { Button } from '@/components/button';
@@ -167,11 +167,9 @@ export default function LabsPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {metricGroups.map((mg) => {
           const statusLabel =
-            mg.status === 'critical'
-              ? '偏高'
-              : mg.status === 'warning'
-                ? '异常'
-                : 'Normal';
+            mg.status === 'normal'
+              ? 'Normal'
+              : getAbnormalityLabel(mg.status, deriveDirection(mg.latest));
 
           return (
             <MetricSummaryCard

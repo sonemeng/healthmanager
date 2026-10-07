@@ -10,6 +10,16 @@ export interface RawExtraction {
   referenceRangeText: string | null;
   isAbnormal: boolean | null;
   observedAt: string | null; // ISO date; null when the source has no usable date
+  /**
+   * 从 analyte 中剥离出的括号内容（缩写/英文名等），如「糖链抗原125(CA125)」→「CA125」。
+   * 只作溯源记录，**不参与匹配判定**。（spec 13 C2）
+   */
+  analyteNote?: string;
+  /**
+   * 检验结果互认标识，如「陕HR」（陕西省互认）、「9-HR」（九省区互认）。
+   * 只作溯源记录，**不参与匹配判定**；可反推出具机构所在省/互认范围。（spec 13 C2）
+   */
+  interopMark?: string;
   category?: DataCategory;
   metadata?: Record<string, unknown>;
 }
@@ -36,11 +46,15 @@ export interface NormalizedObservation {
   loincCode?: string;
   snomedCode?: string;
   analyte?: string;
+  /** 从 analyte 剥离出的括号内容（溯源用，落 observations.metadata_json） */
+  analyteNote?: string;
+  /** 检验结果互认标识（如 陕HR / 9-HR），溯源用，落 observations.metadata_json */
+  interopMark?: string;
 }
 
 export interface FlaggedExtraction {
   extraction: RawExtraction;
-  reason: 'low_confidence' | 'unmatched_metric' | 'ambiguous_unit' | 'duplicate_candidate';
+  reason: 'low_confidence' | 'unmatched_metric' | 'ambiguous_unit' | 'duplicate_candidate' | 'range_unit_mismatch';
   details: string;
 }
 

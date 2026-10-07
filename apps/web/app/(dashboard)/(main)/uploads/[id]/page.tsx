@@ -1,13 +1,13 @@
 "use client";
 
-import { use, useMemo, useState } from "react";
+import { use, useMemo, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc/client";
 import { TitleActionHeader } from "@/components/title-action-header";
 import {
   StatusBadge,
   type HealthStatus,
 } from "@/components/health/status-badge";
-import { deriveStatus, formatRange } from "@/lib/health-utils";
+import { deriveStatus, deriveDirection, getAbnormalityLabel, formatRange } from "@/lib/health-utils";
 import { cn, formatDate, formatObsValue } from "@/lib/utils";
 import { DOC_TYPE_LABELS, IMPORT_JOB_STATUS_MAP } from "@/lib/constants";
 import {
@@ -20,6 +20,10 @@ import {
   Image as ImageIcon,
   Pencil,
   RefreshCw,
+  RotateCcw,
+  RotateCw,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 function formatCategoryName(cat: string) {
@@ -417,7 +421,115 @@ function SummaryCard({
 const inputClass =
   "rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[13px] text-neutral-900 placeholder:text-neutral-400 focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100 transition-all";
 
-// ── 解析透明度面板：原图对照 + 原始提取文本 ─────────────────────────────────
+// ── 解析透明度面板：原图对照（可旋转/缩放/拖动） + 原始提取文本 ────────────────
+
+function ImageViewer({ src, alt }: { src: string; alt: string }) {
+  const [rotation, setRotation] = useState(0);
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef({ x: 0, y: 0 });
+
+  const reset = () => {
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+  };
+
+  const onWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    setScale((s) => Math.min(5, Math.max(0.3, s * (e.deltaY < 0 ? 1.15 : 0.87))));
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setDragging(true);
+    dragStart.current = { x: e.clientX - offset.x, y: e.clientY - offset.y };
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragging) return;
+    setOffset({ x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y });
+  };
+
+  const stopDrag = () => setDragging(false);
+
+  return (
+    <div>
+      {/* 工具栏：旋转 / 缩放 / 复位 */}
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setRotation((r) => r - 90)}
+          className="flex items-center gap-1 rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600 hover:border-accent-300 hover:text-accent-600"
+          title="逆时针旋转 90°"
+        >
+          <RotateCcw className="h-3 w-3" /> 左转
+        </button>
+        <button
+          type="button"
+          onClick={() => setRotation((r) => r + 90)}
+          className="flex items-center gap-1 rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600 hover:border-accent-300 hover:text-accent-600"
+          title="顺时针旋转 90°"
+        >
+          <RotateCw className="h-3 w-3" /> 右转
+        </button>
+        <div className="mx-1 h-4 w-px bg-neutral-200" />
+        <button
+          type="button"
+          onClick={() => setScale((s) => Math.max(0.3, s * 0.8))}
+          className="flex h-6 w-6 items-center justify-center rounded-md border border-neutral-200 bg-white text-xs text-neutral-600 hover:border-accent-300 hover:text-accent-600"
+          title="缩小"
+        >
+          <ZoomOut className="h-3 w-3" />
+        </button>
+        <span className="min-w-[3.5rem] text-center text-[11px] font-mono text-neutral-500">
+          {Math.round(scale * 100)}%
+        </span>
+        <button
+          type="button"
+          onClick={() => setScale((s) => Math.min(5, s * 1.25))}
+          className="flex h-6 w-6 items-center justify-center rounded-md border border-neutral-200 bg-white text-xs text-neutral-600 hover:border-accent-300 hover:text-accent-600"
+          title="放大"
+        >
+          <ZoomIn className="h-3 w-3" />
+        </button>
+        <button
+          type="button"
+          onClick={() => { setRotation(0); reset(); }}
+          className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600 hover:border-accent-300 hover:text-accent-600"
+          title="恢复原始大小和位置"
+        >
+          复位
+        </button>
+        <span className="ml-1 text-[11px] text-neutral-400">
+          滚轮缩放 · 按住拖动
+        </span>
+      </div>
+      {/* 画布：滚轮缩放（含 Ctrl+滚轮），拖动平移 */}
+      <div
+        className="relative flex h-[520px] items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-[repeating-conic-gradient(#f3f3f3_0%_25%,#ffffff_0%_50%)] bg-[length:20px_20px]"
+        onWheel={onWheel}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={stopDrag}
+        onPointerLeave={stopDrag}
+        style={{ cursor: dragging ? "grabbing" : "grab", touchAction: "none" }}
+      >
+        <img
+          src={src}
+          alt={alt}
+          draggable={false}
+          loading="lazy"
+          className="max-h-full max-w-full select-none object-contain transition-transform duration-100"
+          style={{
+            transform: `translate(${offset.x}px, ${offset.y}px) rotate(${rotation}deg) scale(${scale})`,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
 
 function TransparencyPanel({
   artifact,
@@ -465,11 +577,9 @@ function TransparencyPanel({
           {showImage && (
             <div className="border-t border-neutral-100 bg-neutral-50/60 p-4">
               {isImage ? (
-                <img
+                <ImageViewer
                   src={`/api/artifacts/${artifact.sourceArtifactId}`}
                   alt={artifact.fileName}
-                  className="mx-auto max-h-[600px] rounded-lg border border-neutral-200 bg-white object-contain"
-                  loading="lazy"
                 />
               ) : (
                 <p className="py-2 text-center text-xs text-neutral-400">
@@ -506,7 +616,7 @@ function TransparencyPanel({
               ) : (
                 <p className="py-2 text-center text-xs text-neutral-400">
                   {isImage
-                    ? "图片类文件无文本层，解析器直接读取图像内容。"
+                    ? "该图片尚未生成解析记录（可能解析未完成或失败）。解析成功后，AI 识别出的结构化内容会显示在这里。"
                     : "该文件未提取到文本内容。"}
                 </p>
               )}
@@ -745,7 +855,7 @@ function CategoryGroup({
                   {obs.isAbnormal ? (
                     <StatusBadge
                       status={healthStatus}
-                      label={healthStatus === "critical" ? "偏高" : "异常"}
+                      label={getAbnormalityLabel(healthStatus, deriveDirection(obs))}
                     />
                   ) : (
                     <StatusBadge status="normal" label="正常" />

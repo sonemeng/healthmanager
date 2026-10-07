@@ -10,6 +10,8 @@ import {
 import { TrendChart } from "@/components/health/trend-chart";
 import {
   deriveStatus,
+  deriveDirection,
+  getAbnormalityLabel,
   deriveOptimalStatus,
   formatRange,
 } from "@/lib/health-utils";
@@ -197,7 +199,7 @@ export default function LabDetailPage({
           return obs.isAbnormal ? (
             <StatusBadge
               status={obsStatus}
-              label={obsStatus === "critical" ? "偏高" : "异常"}
+              label={getAbnormalityLabel(obsStatus, deriveDirection(obs))}
             />
           ) : (
             <StatusBadge status="normal" label="正常" />
@@ -314,11 +316,9 @@ export default function LabDetailPage({
             <StatusBadge
               status={status}
               label={
-                status === "critical"
-                  ? "偏高"
-                  : status === "warning"
-                    ? "异常"
-                    : "正常"
+                status === "normal" || status === "neutral"
+                  ? "正常"
+                  : getAbnormalityLabel(status, latest ? deriveDirection(latest) : null)
               }
             />
             {latest?.valueNumeric != null && (

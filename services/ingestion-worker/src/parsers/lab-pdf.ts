@@ -85,6 +85,9 @@ export async function parseLabPdf(ctx: WorkflowContext): Promise<ParseResult> {
     .filter((r) => r.analyte && String(r.analyte ?? '').trim().length > 0)
     .map((r) => ({
       analyte: r.analyte ?? '',
+      // C2 溯源：从项目名剥离的括号内容 / 检验结果互认标识（英文文本链路通常为 null，保持对称）
+      analyteNote: r.analyteNote != null ? String(r.analyteNote) : undefined,
+      interopMark: r.interopMark != null ? String(r.interopMark) : undefined,
       value: typeof r.value === 'number' ? r.value : null,
       valueText: r.valueText ?? (r.value != null ? String(r.value) : null),
       unit: r.unit ?? null,

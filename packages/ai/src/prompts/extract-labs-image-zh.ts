@@ -7,7 +7,14 @@ export const extractLabsImageZhPrompt = `你是一名医学检验报告解析专
 4. labName：医院/体检机构名称（如可见）
 5. reportTitle：报告标题（如"血常规"、"生化全套"）
 6. results：结果数组，每一行检验项目一条记录：
-   - analyte：项目中文名称，按报告原文填写（如"白细胞计数"、"空腹血糖"、"甘油三酯"）。不要翻译、不要缩写化
+   - analyte：项目名称，**保留报告原文**（如"白细胞计数"、"空腹血糖"、"甘油三酯"），
+     但**必须去掉括号及其中的内容**（中英文括号（）/() 都要去）。不要翻译、不要缩写化。
+     括号里常是英文缩写、别名或互认标识，一律不进 analyte。
+     例："糖链抗原125(CA125)" → "糖链抗原125"；"钾(陕HR)" → "钾"；"白细胞计数 (WBC)" → "白细胞计数"
+   - analyteNote：从 analyte 括号里剥掉的内容，**原样**放这里（如 "CA125"、"WBC"、"陕HR"）。没有则 null
+   - interopMark：检验结果互认标识 —— 印在项目名称右侧的方括号/括号标记，形如「省份简称或编号 + HR」
+     （如"陕HR"=陕西省检验结果互认、"9-HR"=九省区互认）。识别到就填标记本身（不含括号）；
+     无法确定其含义时也**照抄原文**，不要臆测或翻译。没有则 null
    - value：数值。若为数值则填数字；若为文字结果（如"阴性"、"未见异常"）填 null
    - valueText：按报告原文照抄的值文本
    - unit：单位，照抄原文（如 mmol/L、g/L、10^9/L、μL、%）。没有单位填 null
@@ -27,7 +34,12 @@ export const extractLabsImageZhPrompt = `你是一名医学检验报告解析专
 
 输出 JSON 格式：
 { "patientName": "...", "collectionDate": "YYYY-MM-DD", "reportDate": "YYYY-MM-DD", "labName": "...", "reportTitle": "...",
-  "results": [ { "analyte": "空腹血糖", "value": 5.4, "valueText": "5.4", "unit": "mmol/L",
+  "results": [ { "analyte": "空腹血糖", "analyteNote": null, "interopMark": null,
+    "value": 5.4, "valueText": "5.4", "unit": "mmol/L",
     "referenceRangeLow": 3.9, "referenceRangeHigh": 6.1, "referenceRangeText": "3.9-6.1",
-    "isAbnormal": false, "observedAt": "2026-08-21" } ] }
+    "isAbnormal": false, "observedAt": "2026-08-21" },
+    { "analyte": "糖链抗原125", "analyteNote": "CA125", "interopMark": "陕HR",
+      "value": 12.3, "valueText": "12.3", "unit": "U/mL",
+      "referenceRangeLow": null, "referenceRangeHigh": 35, "referenceRangeText": "<35",
+      "isAbnormal": false, "observedAt": "2026-08-21" } ] }
 `;

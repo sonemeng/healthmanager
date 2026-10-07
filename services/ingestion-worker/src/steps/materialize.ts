@@ -44,6 +44,14 @@ export async function materialize(
       importJobId: ctx.importJobId,
       // AI 识别的原始项目名，界面显示优先用它
       originalValueText: obs.analyte ?? null,
+      // 溯源属性：括号剥离内容 / 检验结果互认标识（C9）。均为空则不写列
+      metadataJson:
+        obs.analyteNote || obs.interopMark
+          ? {
+              ...(obs.analyteNote ? { analyteNote: obs.analyteNote } : {}),
+              ...(obs.interopMark ? { interopMark: obs.interopMark } : {}),
+            }
+          : null,
     }));
 
     const inserted = await db.insert(observations).values(rows).returning({ id: observations.id });
@@ -66,8 +74,11 @@ export async function materialize(
   }
 
   // flagged 行（未匹配/单位不明/低置信）→ status='flagged' 落库，进入待人工确认
-  if (flagged.length > 0) {
-    const flaggedRows = flagged.map((f) => ({
+  // 例外：'range_unit_mismatch' 的抽取项**已经**以 matched 指标（区间置空）落过库了，
+  // 若再以 metricCode='unmatched' 插一条会造成同一数据重复入库 + 假复核项 → 跳过。
+  const flaggedForInsert = flagged.filter((f) => f.reason !== 'range_unit_mismatch');
+  if (flaggedForInsert.length > 0) {
+    const flaggedRows = flaggedForInsert.map((f) => ({
       userId: ctx.userId,
       profileId,
       // 保留字，observations.metric_code 无 FK 可安全使用
@@ -96,7 +107,10 @@ export async function materialize(
   }
 
   // Determine final status（flagged 不计入 extractionCount）
-  const needsReview = flagged.length > 0 || options.forceReview === true;
+  // 注意：仅 'range_unit_mismatch' 不触发 review —— 该行已按 matched 指标正常落库，
+  // 只是区间留空（值为 null 方向待确认），不构成必须人工介入的阻断项。
+  const gatedCount = flagged.filter((f) => f.reason === 'range_unit_mismatch').length;
+  const needsReview = flaggedForInsert.length > 0 || options.forceReview === true;
   const finalStatus = needsReview ? 'review_needed' : 'completed';
 
   await db.update(importJobs)
@@ -120,6 +134,6 @@ export async function materialize(
 
   console.log(
     `[materialize] Inserted ${normalized.length} observations, ` +
-    `${flagged.length} flagged. Status: ${finalStatus}`
+    `${flaggedForInsert.length} flagged, ${gatedCount} range-gated (区间置空). Status: ${finalStatus}`
   );
 }
