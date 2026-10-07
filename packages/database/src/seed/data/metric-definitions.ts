@@ -2249,7 +2249,7 @@ export const metricDefinitionSeeds: MetricDefinitionSeed[] = [
     id: "malb",
     name: "尿微量白蛋白",
     category: "renal",
-    unit: "mg/L",    loincCode: "14957-5",
+    unit: "mg/L",    loincCode: "14957-5",
     snomedCode: null,
     aliases: [
       "MAU",
