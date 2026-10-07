@@ -45,6 +45,7 @@ interface OldRow {
   status: string;
   valueNumeric: number | null;
   unit: string | null;
+  correctionNote: string | null;
 }
 
 function parseRawJson(raw: string): any | null {
@@ -274,6 +275,7 @@ async function main() {
         status: observations.status,
         valueNumeric: observations.valueNumeric,
         unit: observations.unit,
+        correctionNote: observations.correctionNote,
       })
       .from(observations)
       .where(eq(observations.importJobId, job.id));
@@ -283,6 +285,18 @@ async function main() {
     const confirmedKeys = new Set(
       oldRows.filter((r) => r.status === 'confirmed').map((r) => key(r.metricCode, r.originalValueText))
     );
+
+    // 门禁行（reason='range_unit_mismatch'）**已经**以 matched 指标落过 normalized（仅区间被置空），
+    // 若再以 metricCode='unmatched' 插一条，会造成同一数据重复入库 + 假复核项
+    // → 与 steps/materialize.ts 的 flaggedForInsert 过滤保持一致（R1）
+    const flaggedForInsert = flagged.filter((f) => f.reason !== 'range_unit_mismatch');
+
+    // 旧 correction_note 按「原文项目名」保留（重挂会改 metricCode，按 metricCode 找不到旧行）（R1）
+    const oldNoteByAnalyte = new Map<string, string>();
+    for (const r of oldRows) {
+      const k = (r.originalValueText ?? '').trim();
+      if (k && r.correctionNote) oldNoteByAnalyte.set(k, r.correctionNote);
+    }
 
     // 新行（字段映射与 steps/materialize.ts 一致）
     const insertRows = [
@@ -305,9 +319,10 @@ async function main() {
         sourceArtifactId: job.sourceArtifactId,
         importJobId: job.id,
         originalValueText: obs.analyte ?? null,
-        correctionNote: null as string | null,
+        // 保留旧留痕（如区间门禁说明），不要因重写而清空（R1）
+        correctionNote: oldNoteByAnalyte.get((obs.analyte ?? '').trim()) ?? null,
       })),
-      ...flagged.map((f) => ({
+      ...flaggedForInsert.map((f) => ({
         userId: job.userId,
         profileId: job.profileId,
         metricCode: 'unmatched',
@@ -355,7 +370,9 @@ async function main() {
     console.log(
       `任务 ${job.id} (${job.createdAt.toISOString().slice(0, 10)})：` +
         `旧 ${oldRows.length} 行（confirmed ${confirmedKeys.size}）→ 新 ${insertRows.length} 行` +
-        `（normalized ${normalized.length} + flagged ${flagged.length}），数值/单位变化 ${changed.length} 条`
+        `（normalized ${normalized.length} + flagged ${flaggedForInsert.length}` +
+        `${flagged.length !== flaggedForInsert.length ? `，另有 ${flagged.length - flaggedForInsert.length} 条区间门禁行已随 matched 指标落库` : ''}）` +
+        `，数值/单位变化 ${changed.length} 条`
     );
     changed.forEach((c) => console.log(c));
     totalRepaired += changed.length;

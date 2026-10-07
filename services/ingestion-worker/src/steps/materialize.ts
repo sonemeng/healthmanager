@@ -44,12 +44,13 @@ export async function materialize(
       importJobId: ctx.importJobId,
       // AI 识别的原始项目名，界面显示优先用它
       originalValueText: obs.analyte ?? null,
-      // 溯源属性：括号剥离内容 / 检验结果互认标识（C9）。均为空则不写列
+      // 溯源属性：括号剥离内容 / 互认标识 / 区间门禁留痕（C9 + R2）。均为空则不写列
       metadataJson:
-        obs.analyteNote || obs.interopMark
+        obs.analyteNote || obs.interopMark || obs.gateReason
           ? {
               ...(obs.analyteNote ? { analyteNote: obs.analyteNote } : {}),
               ...(obs.interopMark ? { interopMark: obs.interopMark } : {}),
+              ...(obs.gateReason ? { gateReason: obs.gateReason } : {}),
             }
           : null,
     }));

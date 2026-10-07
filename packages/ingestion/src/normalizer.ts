@@ -222,7 +222,7 @@ export function resolveReferenceRange(
 
   // ── 区间对应性门禁 ──────────────────────────────────────────────────────────
   // (1) 单位一致性：fallback 数值是在字典单位下写的，观测单位必须一致
-  const unitGate = checkUnitConsistency(extraction.unit, metric.unit);
+  const unitGate = checkUnitConsistency(extraction.unit, metric.unit, metric.id);
   if (!unitGate.ok) {
     return { low: null, high: null, gated: true, gateReason: unitGate.reason };
   }
@@ -301,6 +301,8 @@ export function normalizeExtractions(
       // 溯源属性：括号剥离内容 + 互认标识（不参与匹配，落 metadata_json）
       analyteNote: extraction.analyteNote,
       interopMark: extraction.interopMark,
+      // 门禁留痕（R2）：被拦下时记录原因，落 metadata_json 供事后审计
+      gateReason: range.gateReason,
     };
 
     if (baseConfidence < CONFIDENCE_THRESHOLD) {

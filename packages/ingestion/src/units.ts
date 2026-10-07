@@ -28,15 +28,16 @@ export function canonicalUnit(raw: string | null | undefined): string | null {
   u = u.replace(/^K\s*\/\s*[uµ]L$/i, '10^9/L');
   u = u.replace(/^M\s*\/\s*[uµ]L$/i, '10^12/L');
 
-  // 3) 分母/分子大小写归一
+  // 3) 分母/分子大小写归一（R5：泛化到任意分子，避免 pg/ml vs pg/mL、ml/min vs mL/min 被误判为不同单位）
   u = u.replace(/^u\s*mol\s*\/\s*l$/i, '\u00B5mol/L'); // umol/l、umol/L
   u = u.replace(/\u00B5mol\s*\/\s*l$/i, '\u00B5mol/L'); // µmol/l
   u = u.replace(/\/\s*l$/i, '/L'); // mg/l → mg/L、mmol/l → mmol/L
+  u = u.replace(/\/\s*ml$/i, '/mL'); // pg/ml → pg/mL、ng/ml → ng/mL
+  u = u.replace(/\/\s*dl$/i, '/dL'); // mg/dl → mg/dL、g/dl → g/dL
+  u = u.replace(/\/\s*ul$/i, '/\u00B5L'); // /ul → /µL
+  u = u.replace(/^ml\s*\//i, 'mL/'); // ml/min/1.73m2 → mL/min/1.73m2
   u = u.replace(/^u\s*\/\s*l$/i, 'U/L'); // u/l → U/L
   u = u.replace(/^u\s*\/\s*ml$/i, 'U/mL');
-  u = u.replace(/\/\s*ul$/i, '/\u00B5L'); // /ul → /µL
-  u = u.replace(/^mg\s*\/\s*dl$/i, 'mg/dL');
-  u = u.replace(/^g\s*\/\s*dl$/i, 'g/dL');
 
   // 4) 去内部空白
   u = u.replace(/\s+/g, '');
@@ -50,18 +51,49 @@ export interface GateResult {
 }
 
 /**
+ * 逐指标「单位等价类」（R6）—— 只有**显式声明过**的指标才允许跨拼写等价，
+ * 未声明的仍走严格相等（安全默认）。
+ *
+ * 检验医学依据：
+ *  - **单价离子** K⁺ / Na⁺ / Cl⁻ / HCO₃⁻：1 mEq/L ≡ 1 mmol/L（数值完全相等，仅表达方式不同）
+ *  - **二价离子 Ca²⁺ / Mg²⁺ 明确不可等价**：1 mmol/L = 2 mEq/L，
+ *    若一并等价会引入 2 倍误差 → 故意不列入。
+ *
+ * 历史教训：本轮首次实现时一刀切禁止 mEq/L 与 mmol/L 等价，导致
+ * potassium / sodium / chloride / co2 的 fallback 区间被**误杀**（实测 4 条）。
+ */
+const UNIT_EQUIVALENCE: Record<string, string[][]> = {
+  potassium: [['mEq/L', 'mmol/L']],
+  sodium: [['mEq/L', 'mmol/L']],
+  chloride: [['mEq/L', 'mmol/L']],
+  co2: [['mEq/L', 'mmol/L']],
+};
+
+function isEquivalentUnit(metricId: string, a: string, b: string): boolean {
+  const pairs = UNIT_EQUIVALENCE[metricId];
+  if (!pairs) return false;
+  return pairs.some(([x, y]) => (a === x && b === y) || (a === y && b === x));
+}
+
+/**
  * 单位一致性门禁（spec 13 §五）。
  *
  * 逻辑：fallback 区间的数值是在**字典声明的单位**下写的（metric_definitions.unit）。
- * 只有当观测单位与字典单位一致时，那串数字才可能对得上；单位不一致 = 数字量级必然错位
- * （如 creatinine 字典 0.6~1.2 mg/dL 贴到 146 µmol/L 的值上，差 88.4 倍）。
+ * 只有当观测单位与字典单位一致（或属声明的等价类）时，那串数字才可能对得上；
+ * 单位不一致 = 数字量级必然错位（如 creatinine 字典 0.6~1.2 mg/dL 贴到 146 µmol/L 的值上，差 88.4 倍）。
+ *
+ * @param metricId 指标 id —— 用于查逐指标等价类（R6）。不传则只做严格相等。
  */
 export function checkUnitConsistency(
   obsUnit: string | null | undefined,
   dictUnit: string | null | undefined,
+  metricId?: string,
 ): GateResult {
   const u = canonicalUnit(obsUnit);
   const d = canonicalUnit(dictUnit);
+
+  // R7：两边都无单位 →「不一致」这个判据不成立，不做判定（避免无谓拦截）
+  if (!u && !d) return { ok: true };
 
   if (!u) {
     return { ok: false, reason: '观测单位缺失，无法确认区间对应性' };
@@ -70,6 +102,10 @@ export function checkUnitConsistency(
     return { ok: false, reason: `字典未声明单位，无法确认 fallback 区间（观测单位 ${u}）的对应性` };
   }
   if (u === d) return { ok: true };
+
+  // R6：逐指标等价类（仅声明过的指标，如单价离子的 mEq/L ≡ mmol/L）
+  if (metricId && isEquivalentUnit(metricId, u, d)) return { ok: true };
+
   return { ok: false, reason: `观测单位 ${u} 与字典区间单位 ${d} 不一致，fallback 区间数值量级不可用` };
 }
 

@@ -50,6 +50,11 @@ export interface NormalizedObservation {
   analyteNote?: string;
   /** 检验结果互认标识（如 陕HR / 9-HR），溯源用，落 observations.metadata_json */
   interopMark?: string;
+  /**
+   * 区间对应性门禁拦下时的原因（R2）：报告未印区间、字典兜底区间与观测单位不符
+   * → 区间已置空。落 observations.metadata_json，供事后审计「这条为什么没有区间」。
+   */
+  gateReason?: string;
 }
 
 export interface FlaggedExtraction {
