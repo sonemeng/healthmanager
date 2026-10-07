@@ -154,7 +154,11 @@ export const MAGNITUDE_BANDS: Record<string, MagnitudeBand> = {
   'monocytes_pct@%': { low: 3, high: 10, note: '报告原文 3-10' },
   'mpv@fL': { low: 6.5, high: 12, note: '报告原文 6.5-12' },
   'neutrophils_pct@%': { low: 40, high: 75, note: '报告原文 40-75' },
+  // 血小板子项（Plan 13 收官轮新增；样本 = 两份真实血细胞分析报告，重挂后 metric 归属正确）
+  'pct@%': { low: 0.108, high: 0.282, note: '报告原文 0.108-0.282（血小板压积 %）' },
   'platelets@10^9/L': { low: 30, high: 400, note: '报告原文 125-350（放宽至 30-400）' },
+  'plcc@10^9/L': { low: 30, high: 90, note: '报告原文 30-90（大血小板数目）' },
+  'plcr@%': { low: 11, high: 45, note: '报告原文 11-45（大血小板比率）' },
   'potassium@mmol/L': { low: 3.5, high: 5.5, note: '报告原文 3.5-5.5' },
   'rbc@10^12/L': { low: 3.8, high: 5.1, note: '报告原文 3.8-5.1' },
   'sodium@mmol/L': { low: 135, high: 147, note: '报告原文 135-147' },
