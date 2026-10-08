@@ -170,23 +170,36 @@ export async function deleteImportJob(
     userId: string;
   },
 ) {
-  const rows = await db
-    .delete(importJobs)
-    .where(
-      and(eq(importJobs.id, params.id), eq(importJobs.userId, params.userId)),
-    )
-    .returning({
-      id: importJobs.id,
-      sourceArtifactId: importJobs.sourceArtifactId,
-    });
+  // 事务 + 先删 observations：observations.import_job_id 外键为 NO ACTION（无级联），
+  // 若不先删观测，删除已解析出数据的任务会因外键冲突失败（2026-10-08 修复）。
+  return db.transaction(async (tx) => {
+    const [job] = await tx
+      .select({
+        id: importJobs.id,
+        sourceArtifactId: importJobs.sourceArtifactId,
+      })
+      .from(importJobs)
+      .where(
+        and(eq(importJobs.id, params.id), eq(importJobs.userId, params.userId)),
+      )
+      .limit(1);
 
-  if (rows[0]) {
-    await db
+    if (!job) return null;
+
+    await tx
+      .delete(observations)
+      .where(eq(observations.importJobId, job.id));
+
+    await tx
+      .delete(importJobs)
+      .where(eq(importJobs.id, job.id));
+
+    await tx
       .delete(sourceArtifacts)
-      .where(eq(sourceArtifacts.id, rows[0].sourceArtifactId));
-  }
+      .where(eq(sourceArtifacts.id, job.sourceArtifactId));
 
-  return rows[0] ?? null;
+    return job;
+  });
 }
 
 export async function getReviewQueue(
