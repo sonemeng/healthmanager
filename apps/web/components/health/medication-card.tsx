@@ -1,5 +1,5 @@
 import { StatusBadge } from './status-badge';
-import { Trash2 } from 'lucide-react';
+import { Pencil, Trash2 } from 'lucide-react';
 
 interface MedicationCardProps {
   name: string;
@@ -8,11 +8,17 @@ interface MedicationCardProps {
   indication: string;
   status: 'active' | 'discontinued';
   startDate: string;
+  endDate?: string;
+  onEdit?: () => void;
   onDelete?: () => void;
   isDeleting?: boolean;
 }
 
-export function MedicationCard({ name, dose, frequency, indication, status, startDate, onDelete, isDeleting }: MedicationCardProps) {
+export function MedicationCard({ name, dose, frequency, indication, status, startDate, endDate, onEdit, onDelete, isDeleting }: MedicationCardProps) {
+  const dateRange = startDate
+    ? `${startDate} 至 ${status === 'active' ? '今' : endDate ?? '—'}`
+    : '—';
+
   return (
     <div className="card p-5 transition-all hover:border-accent-300">
       <div className="mb-3 flex items-start justify-between">
@@ -29,6 +35,17 @@ export function MedicationCard({ name, dose, frequency, indication, status, star
             status={status === 'active' ? 'normal' : 'neutral'}
             label={status === 'active' ? '在用' : '已停用'}
           />
+          {onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="rounded-md p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600"
+              title="编辑用药记录"
+              aria-label={`编辑${name}`}
+            >
+              <Pencil className="size-3.5" />
+            </button>
+          )}
           {onDelete && (
             <button
               type="button"
@@ -47,7 +64,7 @@ export function MedicationCard({ name, dose, frequency, indication, status, star
         {indication}
       </div>
       <div className="text-[11px] text-neutral-400 font-mono">
-        Started {startDate}
+        {dateRange}
       </div>
     </div>
   );

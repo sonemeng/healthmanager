@@ -101,6 +101,10 @@ export type PendingRecordCandidate =
       provider?: string;
       facility?: string;
       chiefComplaint?: string;
+      presentIllness?: string;
+      pastHistory?: string;
+      physicalExam?: string;
+      advice?: string;
       summary?: string;
     };
 

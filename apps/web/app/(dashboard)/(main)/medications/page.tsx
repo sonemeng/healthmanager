@@ -129,6 +129,8 @@ export default function MedicationsPage() {
                 indication={med.indication ?? '—'}
                 status="active"
                 startDate={med.startDate ? formatDate(med.startDate) : '—'}
+                endDate={med.endDate ? formatDate(med.endDate) : undefined}
+                onEdit={() => modal.show(<AddMedicationModal medication={med} />)}
                 onDelete={() => handleDelete(med.id, med.name)}
                 isDeleting={deleteMutation.isPending}
               />
@@ -152,6 +154,8 @@ export default function MedicationsPage() {
                 indication={med.indication ?? '—'}
                 status="discontinued"
                 startDate={med.startDate ? formatDate(med.startDate) : '—'}
+                endDate={med.endDate ? formatDate(med.endDate) : undefined}
+                onEdit={() => modal.show(<AddMedicationModal medication={med} />)}
                 onDelete={() => handleDelete(med.id, med.name)}
                 isDeleting={deleteMutation.isPending}
               />

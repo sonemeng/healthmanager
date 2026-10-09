@@ -60,6 +60,10 @@ const candidateSchema = z.discriminatedUnion("kind", [
     provider: z.string().optional(),
     facility: z.string().optional(),
     chiefComplaint: z.string().optional(),
+    presentIllness: z.string().optional(),
+    pastHistory: z.string().optional(),
+    physicalExam: z.string().optional(),
+    advice: z.string().optional(),
     summary: z.string().optional(),
   }),
 ]);
@@ -124,7 +128,7 @@ export const importJobsRouter = createRouter({
         dataSourceId: z.string().uuid().optional(),
         profileId: z.string().uuid().optional(),
         batchId: z.string().min(1).max(100).optional(),
-        documentType: z.enum(["encounter_note", "imaging_report", "dental_record", "immunization_record"]).optional(),
+        documentType: z.enum(["lab_report", "encounter_note", "imaging_report", "dental_record", "immunization_record"]).optional(),
         importTarget: z.enum(["medication", "condition", "encounter"]).optional(),
       }),
     )
@@ -370,7 +374,7 @@ export const importJobsRouter = createRouter({
         ? { ...candidate, name: editable.name?.trim() || candidate.name, dosage: editable.dosage?.trim() || undefined, frequency: editable.frequency?.trim() || undefined, indication: editable.indication?.trim() || undefined, startDate: editable.startDate?.trim() || undefined }
         : candidate.kind === "condition"
           ? { ...candidate, name: editable.name?.trim() || candidate.name, onsetDate: editable.onsetDate?.trim() || undefined, notes: editable.notes?.trim() || undefined }
-          : { ...candidate, encounterDate: editable.encounterDate?.trim() || candidate.encounterDate, provider: editable.provider?.trim() || undefined, facility: editable.facility?.trim() || undefined, chiefComplaint: editable.chiefComplaint?.trim() || undefined, summary: editable.summary?.trim() || undefined };
+          : { ...candidate, encounterDate: editable.encounterDate?.trim() || candidate.encounterDate, provider: editable.provider?.trim() || undefined, facility: editable.facility?.trim() || undefined, chiefComplaint: editable.chiefComplaint?.trim() || undefined, presentIllness: editable.presentIllness?.trim() || undefined, pastHistory: editable.pastHistory?.trim() || undefined, physicalExam: editable.physicalExam?.trim() || undefined, advice: editable.advice?.trim() || undefined, summary: editable.summary?.trim() || undefined };
 
       const profileId = (await getActiveProfileId(ctx.userId)) ?? null;
       if (input.action === "confirm") {
@@ -387,10 +391,18 @@ export const importJobsRouter = createRouter({
             sourceArtifactId: job.sourceArtifactId, importJobId: job.id,
           });
         } else {
+          const structuredMeta = {
+            ...(updatedCandidate.presentIllness ? { presentIllness: updatedCandidate.presentIllness } : {}),
+            ...(updatedCandidate.pastHistory ? { pastHistory: updatedCandidate.pastHistory } : {}),
+            ...(updatedCandidate.physicalExam ? { physicalExam: updatedCandidate.physicalExam } : {}),
+            ...(updatedCandidate.advice ? { advice: updatedCandidate.advice } : {}),
+          };
           await ctx.db.insert(encounters).values({
             userId: ctx.userId, profileId, type: updatedCandidate.type, encounterDate: updatedCandidate.encounterDate,
             provider: updatedCandidate.provider, facility: updatedCandidate.facility, chiefComplaint: updatedCandidate.chiefComplaint,
-            summary: updatedCandidate.summary, sourceArtifactId: job.sourceArtifactId, importJobId: job.id,
+            summary: updatedCandidate.summary,
+            ...(Object.keys(structuredMeta).length ? { metadataJson: structuredMeta } : {}),
+            sourceArtifactId: job.sourceArtifactId, importJobId: job.id,
           });
         }
       }

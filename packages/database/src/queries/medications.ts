@@ -67,11 +67,17 @@ export async function updateMedication(
     id: string;
     userId: string;
     name?: string;
-    dosage?: string;
-    frequency?: string;
+    genericName?: string | null;
+    category?: string | null;
+    dosage?: string | null;
+    frequency?: string | null;
+    route?: string | null;
+    prescriber?: string | null;
+    indication?: string | null;
+    startDate?: string | null;
     isActive?: boolean;
-    endDate?: string;
-    notes?: string;
+    endDate?: string | null;
+    notes?: string | null;
   },
 ) {
   const { id, userId, ...fields } = params;
@@ -82,6 +88,57 @@ export async function updateMedication(
     .returning();
 
   return result[0] ?? null;
+}
+
+// 用药变化分段记录：旧段结束（end_date=changeDate + 停用），同事务新开一段。
+// 新段复制药名/类别/途径/开方医生/profile 归属，用量/频次/用途/备注取新值。
+export async function recordMedicationChange(
+  db: Database,
+  params: {
+    id: string;
+    userId: string;
+    dosage?: string | null;
+    frequency?: string | null;
+    indication?: string | null;
+    changeDate: string;
+    notes?: string | null;
+  },
+) {
+  const [existing] = await db
+    .select()
+    .from(medications)
+    .where(and(eq(medications.id, params.id), eq(medications.userId, params.userId)))
+    .limit(1);
+  if (!existing) return null;
+
+  return db.transaction(async (tx) => {
+    await tx
+      .update(medications)
+      .set({ isActive: false, endDate: params.changeDate, updatedAt: new Date() })
+      .where(eq(medications.id, existing.id));
+
+    const [row] = await tx
+      .insert(medications)
+      .values({
+        userId: existing.userId,
+        profileId: existing.profileId,
+        name: existing.name,
+        genericName: existing.genericName,
+        category: existing.category,
+        route: existing.route,
+        prescriber: existing.prescriber,
+        indication: params.indication ?? existing.indication,
+        dosage: params.dosage ?? null,
+        frequency: params.frequency ?? null,
+        startDate: params.changeDate,
+        notes: params.notes ?? null,
+        status: 'manual',
+        isActive: true,
+      })
+      .returning();
+
+    return row!;
+  });
 }
 
 export async function getAdherenceLogs(

@@ -41,6 +41,38 @@ function formatCategoryName(cat: string) {
   return labels[cat] ?? cat;
 }
 
+// 候选编辑表单的字段中文标签（缺失时回退显示原始 key）
+const CANDIDATE_FIELD_LABELS: Record<string, string> = {
+  name: "名称",
+  dosage: "用量",
+  frequency: "频次",
+  indication: "用途",
+  startDate: "开始日期",
+  onsetDate: "发病日期",
+  notes: "备注",
+  encounterDate: "就诊日期",
+  provider: "医生",
+  facility: "机构",
+  chiefComplaint: "主诉",
+  presentIllness: "现病史",
+  pastHistory: "既往史",
+  physicalExam: "体格检查",
+  advice: "医嘱建议",
+  summary: "摘要",
+};
+
+// 长文本字段用 textarea 编辑
+const CANDIDATE_LONG_FIELDS = new Set([
+  "indication",
+  "notes",
+  "chiefComplaint",
+  "presentIllness",
+  "pastHistory",
+  "physicalExam",
+  "advice",
+  "summary",
+]);
+
 export default function ImportJobDetailPage({
   params,
 }: {
@@ -370,7 +402,7 @@ function getPendingCandidates(value: unknown): PendingCandidate[] {
     if (item.status !== "pending" || typeof item.id !== "string") return result;
     if (item.kind === "medication" && typeof item.name === "string") result.push({ id: item.id, kind: "medication", title: `用药：${item.name}`, detail: [item.dosage, item.frequency, item.indication].filter((part): part is string => typeof part === "string" && Boolean(part)).join(" · ") || "未提供更多信息", fields: { name: item.name, dosage: typeof item.dosage === "string" ? item.dosage : "", frequency: typeof item.frequency === "string" ? item.frequency : "", indication: typeof item.indication === "string" ? item.indication : "", startDate: typeof item.startDate === "string" ? item.startDate : "" } });
     if (item.kind === "condition" && typeof item.name === "string") result.push({ id: item.id, kind: "condition", title: `病史：${item.name}`, detail: typeof item.notes === "string" ? item.notes : "待确认病史记录", fields: { name: item.name, onsetDate: typeof item.onsetDate === "string" ? item.onsetDate : "", notes: typeof item.notes === "string" ? item.notes : "" } });
-    if (item.kind === "encounter" && typeof item.encounterDate === "string") result.push({ id: item.id, kind: "encounter", title: `就诊：${item.encounterDate}`, detail: [item.provider, item.facility, item.chiefComplaint].filter((part): part is string => typeof part === "string" && Boolean(part)).join(" · ") || "待确认就诊记录", fields: { encounterDate: item.encounterDate, provider: typeof item.provider === "string" ? item.provider : "", facility: typeof item.facility === "string" ? item.facility : "", chiefComplaint: typeof item.chiefComplaint === "string" ? item.chiefComplaint : "", summary: typeof item.summary === "string" ? item.summary : "" } });
+    if (item.kind === "encounter" && typeof item.encounterDate === "string") result.push({ id: item.id, kind: "encounter", title: `就诊：${item.encounterDate}`, detail: [item.provider, item.facility, item.chiefComplaint].filter((part): part is string => typeof part === "string" && Boolean(part)).join(" · ") || "待确认就诊记录", fields: { encounterDate: item.encounterDate, provider: typeof item.provider === "string" ? item.provider : "", facility: typeof item.facility === "string" ? item.facility : "", chiefComplaint: typeof item.chiefComplaint === "string" ? item.chiefComplaint : "", presentIllness: typeof item.presentIllness === "string" ? item.presentIllness : "", pastHistory: typeof item.pastHistory === "string" ? item.pastHistory : "", physicalExam: typeof item.physicalExam === "string" ? item.physicalExam : "", advice: typeof item.advice === "string" ? item.advice : "", summary: typeof item.summary === "string" ? item.summary : "" } });
     return result;
   }, []);
 }
@@ -380,7 +412,7 @@ function PendingCandidateRow({ candidate, isPending, onResolve }: { candidate: P
   const [fields, setFields] = useState(candidate.fields);
   return <div className="px-5 py-3.5">
     <div className="flex items-start justify-between gap-4"><div><p className="text-[13px] font-medium text-neutral-900">{candidate.title}</p><p className="mt-0.5 text-[11px] text-neutral-500">{candidate.detail}</p></div><button onClick={() => setEditing(!editing)} className="text-[11px] text-accent-600 hover:text-accent-700">{editing ? "收起编辑" : "修改后确认"}</button></div>
-    {editing && <div className="mt-3 grid gap-2 sm:grid-cols-2">{Object.entries(fields).map(([key, value]) => <label key={key} className="text-[11px] text-neutral-500">{key}<input type={key.toLowerCase().includes("date") ? "date" : "text"} value={value} onChange={(event) => setFields((current) => ({ ...current, [key]: event.target.value }))} className="mt-1 w-full rounded border border-neutral-200 px-2 py-1.5 text-[12px] text-neutral-900" /></label>)}</div>}
+    {editing && <div className="mt-3 grid gap-2 sm:grid-cols-2">{Object.entries(fields).map(([key, value]) => <label key={key} className="text-[11px] text-neutral-500">{CANDIDATE_FIELD_LABELS[key] ?? key}{CANDIDATE_LONG_FIELDS.has(key) ? <textarea value={value} rows={2} onChange={(event) => setFields((current) => ({ ...current, [key]: event.target.value }))} className="mt-1 w-full rounded border border-neutral-200 px-2 py-1.5 text-[12px] text-neutral-900" /> : <input type={key.toLowerCase().includes("date") ? "date" : "text"} value={value} onChange={(event) => setFields((current) => ({ ...current, [key]: event.target.value }))} className="mt-1 w-full rounded border border-neutral-200 px-2 py-1.5 text-[12px] text-neutral-900" />}</label>)}</div>}
     <div className="mt-3 flex justify-end gap-2"><button onClick={() => onResolve("reject", fields)} disabled={isPending} className="rounded-md border border-neutral-200 px-2.5 py-1 text-[11px] text-neutral-600 hover:bg-neutral-50 disabled:opacity-50">忽略</button><button onClick={() => onResolve("confirm", fields)} disabled={isPending} className="rounded-md bg-accent-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-accent-700 disabled:opacity-50">确认写入</button></div>
   </div>;
 }

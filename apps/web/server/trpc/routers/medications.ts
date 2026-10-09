@@ -1,9 +1,20 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { createRouter, protectedProcedure } from '../init';
-import { listMedications, createMedication, updateMedication, logMedicationAdherence, getAdherenceLogs, medications } from '@openvitals/database';
+import { listMedications, createMedication, updateMedication, recordMedicationChange, logMedicationAdherence, getAdherenceLogs, medications } from '@openvitals/database';
 import { and, eq } from 'drizzle-orm';
 import { getActiveProfileId } from '../active-profile';
+
+// 空字符串 → null（清空字段）；undefined → 不修改
+function clearable(value: string | undefined): string | null | undefined {
+  if (value === undefined) return undefined;
+  return value.trim() || null;
+}
+
+function dateOrNull(value: Date | null | undefined): string | null | undefined {
+  if (value == null) return value;
+  return value.toISOString().split('T')[0];
+}
 
 export const medicationsRouter = createRouter({
   list: protectedProcedure
@@ -57,11 +68,16 @@ export const medicationsRouter = createRouter({
   update: protectedProcedure
     .input(z.object({
       id: z.string().uuid(),
-      name: z.string().optional(),
+      name: z.string().min(1).max(255).optional(),
+      category: z.enum(['prescription', 'supplement', 'otc']).optional(),
       dosage: z.string().optional(),
       frequency: z.string().optional(),
+      route: z.string().optional(),
+      prescriber: z.string().optional(),
+      indication: z.string().optional(),
+      startDate: z.date().nullable().optional(),
       isActive: z.boolean().optional(),
-      endDate: z.date().optional(),
+      endDate: z.date().nullable().optional(),
       notes: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
@@ -69,16 +85,47 @@ export const medicationsRouter = createRouter({
         id: input.id,
         userId: ctx.userId,
         name: input.name,
-        dosage: input.dosage,
-        frequency: input.frequency,
+        category: input.category,
+        dosage: clearable(input.dosage),
+        frequency: clearable(input.frequency),
+        route: clearable(input.route),
+        prescriber: clearable(input.prescriber),
+        indication: clearable(input.indication),
+        startDate: dateOrNull(input.startDate),
         isActive: input.isActive,
-        endDate: input.endDate?.toISOString().split('T')[0],
-        notes: input.notes,
+        endDate: dateOrNull(input.endDate),
+        notes: clearable(input.notes),
       });
       if (!result) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Medication not found' });
       }
       return { success: true };
+    }),
+
+  // 用药变化：旧段自动停用（end_date=changeDate），新开一段保留历史
+  recordChange: protectedProcedure
+    .input(z.object({
+      id: z.string().uuid(),
+      dosage: z.string().optional(),
+      frequency: z.string().optional(),
+      indication: z.string().optional(),
+      notes: z.string().optional(),
+      changeDate: z.date(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const row = await recordMedicationChange(ctx.db, {
+        id: input.id,
+        userId: ctx.userId,
+        dosage: clearable(input.dosage),
+        frequency: clearable(input.frequency),
+        indication: clearable(input.indication),
+        notes: clearable(input.notes),
+        changeDate: input.changeDate.toISOString().split('T')[0]!,
+      });
+      if (!row) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Medication not found' });
+      }
+      return { id: row.id };
     }),
 
   delete: protectedProcedure

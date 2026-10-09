@@ -24,6 +24,24 @@ import {
 import { downloadCsv, downloadText } from "@/lib/export";
 import { ModuleImports } from "@/components/health/module-imports";
 
+// 从 metadata_json 提取病历结构化小节（现病史/既往史/体格检查/医嘱建议），旧数据无则返回空
+function encounterMetaSections(metadataJson: unknown): Array<[string, string]> {
+  if (!metadataJson || typeof metadataJson !== "object") return [];
+  const meta = metadataJson as Record<string, unknown>;
+  const entries: Array<[string, string]> = [
+    ["presentIllness", "现病史"],
+    ["pastHistory", "既往史"],
+    ["physicalExam", "体格检查"],
+    ["advice", "医嘱建议"],
+  ];
+  const sections: Array<[string, string]> = [];
+  for (const [key, label] of entries) {
+    const value = meta[key];
+    if (typeof value === "string" && value.trim()) sections.push([label, value]);
+  }
+  return sections;
+}
+
 const encounterTypeConfig: Record<
   string,
   { label: string; color: string; bg: string }
@@ -104,7 +122,7 @@ export default function EncountersPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline-subtle" size="sm" icon={<Download />} text="导出详细文档" onClick={() => downloadText("healthmanager-encounters-detail", ["# HealthManager 就诊记录", "", `生成日期：${new Date().toISOString().slice(0, 10)}`, "", ...(encounters?.length ? encounters.map((e) => `## ${e.encounterDate}｜${encounterTypeConfig[e.type]?.label ?? e.type}\n- 医生：${e.provider ?? "未记录"}\n- 医疗机构：${e.facility ?? "未记录"}\n- 主诉：${e.chiefComplaint ?? "未记录"}\n- 摘要：${e.summary ?? "无"}`) : ["暂无就诊记录。"]), "", "本文件含个人健康信息，仅应分享给可信的家人、照护者或医疗专业人员。"].join("\n\n"), "text/markdown;charset=utf-8", "md")} />
+          <Button variant="outline-subtle" size="sm" icon={<Download />} text="导出详细文档" onClick={() => downloadText("healthmanager-encounters-detail", ["# HealthManager 就诊记录", "", `生成日期：${new Date().toISOString().slice(0, 10)}`, "", ...(encounters?.length ? encounters.map((e) => `## ${e.encounterDate}｜${encounterTypeConfig[e.type]?.label ?? e.type}\n- 医生：${e.provider ?? "未记录"}\n- 医疗机构：${e.facility ?? "未记录"}\n- 主诉：${e.chiefComplaint ?? "未记录"}\n- 摘要：${e.summary ?? "无"}${encounterMetaSections(e.metadataJson).map(([label, value]) => `\n- ${label}：${value}`).join("")}`) : ["暂无就诊记录。"]), "", "本文件含个人健康信息，仅应分享给可信的家人、照护者或医疗专业人员。"].join("\n\n"), "text/markdown;charset=utf-8", "md")} />
           {encounters && encounters.length > 0 && (
             <>
             <Button
@@ -212,6 +230,12 @@ export default function EncountersPage() {
                           {encounter.summary}
                         </p>
                       )}
+                      {encounterMetaSections(encounter.metadataJson).map(([label, value]) => (
+                        <div key={label} className="mt-1.5 max-w-lg text-[12px] leading-relaxed">
+                          <span className="font-medium text-neutral-700">{label}：</span>
+                          <span className="text-neutral-600">{value}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
 

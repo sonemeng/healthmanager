@@ -17,6 +17,7 @@ export {
   listMedications,
   createMedication,
   updateMedication,
+  recordMedicationChange,
   logMedicationAdherence,
   getAdherenceLogs,
 } from "./queries/medications";
