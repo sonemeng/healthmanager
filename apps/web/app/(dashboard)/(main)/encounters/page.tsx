@@ -7,6 +7,7 @@ import { AnimatedEmptyState } from "@/components/animated-empty-state";
 import { Button } from "@/components/button";
 import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import {
   Plus,
@@ -19,6 +20,7 @@ import {
   Trash2,
   Clock,
   Download,
+  FileText,
   type LucideIcon,
 } from "lucide-react";
 import { downloadCsv, downloadText } from "@/lib/export";
@@ -86,6 +88,7 @@ export default function EncountersPage() {
   const { data: encounters, isLoading } = trpc.encounters.list.useQuery();
   const modal = useModal();
   const utils = trpc.useUtils();
+  const router = useRouter();
 
   const deleteMutation = trpc.encounters.delete.useMutation({
     onSuccess: () => utils.encounters.list.invalidate(),
@@ -180,6 +183,8 @@ export default function EncountersPage() {
           {encounters?.map((encounter) => {
             const typeConfig =
               encounterTypeConfig[encounter.type] ?? encounterTypeConfig.other;
+            // 有导入来源的就诊才有「查看原始病历」入口（手动新建的无）
+            const sourceJobId = encounter.importJobId;
 
             return (
               <div
@@ -258,6 +263,18 @@ export default function EncountersPage() {
                           onClick={() => setMenuOpen(null)}
                         />
                         <div className="absolute right-0 top-8 z-20 w-36 bg-white border border-neutral-200 py-1">
+                          {sourceJobId && (
+                            <button
+                              onClick={() => {
+                                router.push(`/uploads/${sourceJobId}`);
+                                setMenuOpen(null);
+                              }}
+                              className="w-full px-3 py-2 text-left text-[12px] font-body text-neutral-700 hover:bg-neutral-50 transition-colors flex items-center gap-2 cursor-pointer"
+                            >
+                              <FileText className="size-3.5" />
+                              查看原始病历
+                            </button>
+                          )}
                           <button
                             onClick={() => {
                               modal.show(<AddEncounterModal encounter={encounter} />);

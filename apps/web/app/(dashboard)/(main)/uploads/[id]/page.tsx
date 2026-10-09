@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useMemo, useRef, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "@/lib/trpc/client";
 import { TitleActionHeader } from "@/components/title-action-header";
 import {
@@ -461,15 +461,24 @@ function ImageViewer({ src, alt }: { src: string; alt: string }) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
+  // React 合成 onWheel 是 passive 监听，preventDefault 无效 → 滚轮冒泡滚页面。
+  // 改用 ref + 原生 addEventListener({ passive: false }) 才能真正拦住滚轮。
+  const canvasRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      setScale((s) => Math.min(5, Math.max(0.3, s * (e.deltaY < 0 ? 1.15 : 0.87))));
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, []);
 
   const reset = () => {
     setScale(1);
     setOffset({ x: 0, y: 0 });
-  };
-
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    setScale((s) => Math.min(5, Math.max(0.3, s * (e.deltaY < 0 ? 1.15 : 0.87))));
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -538,15 +547,19 @@ function ImageViewer({ src, alt }: { src: string; alt: string }) {
           滚轮缩放 · 按住拖动
         </span>
       </div>
-      {/* 画布：滚轮缩放（含 Ctrl+滚轮），拖动平移 */}
+      {/* 画布：滚轮缩放（原生监听，非 passive），拖动平移 */}
       <div
+        ref={canvasRef}
         className="relative flex h-[520px] items-center justify-center overflow-hidden rounded-lg border border-neutral-200 bg-[repeating-conic-gradient(#f3f3f3_0%_25%,#ffffff_0%_50%)] bg-[length:20px_20px]"
-        onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={stopDrag}
         onPointerLeave={stopDrag}
-        style={{ cursor: dragging ? "grabbing" : "grab", touchAction: "none" }}
+        style={{
+          cursor: dragging ? "grabbing" : "grab",
+          touchAction: "none",
+          overscrollBehavior: "contain",
+        }}
       >
         <img
           src={src}
