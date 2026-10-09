@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
+import { toast } from "sonner";
 import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE } from "@openvitals/common";
 import { trpc } from "@/lib/trpc/client";
 import { TitleActionHeader } from "@/components/title-action-header";
@@ -164,6 +165,11 @@ export default function UploadsPage() {
   const [confirmUpload, setConfirmUpload] = useState(false);
   const [sortBy, setSortBy] = useState<"createdAt" | "observedAt">("createdAt");
   const [joinBatchId, setJoinBatchId] = useState("");
+  // 解析类型：auto = 系统自动识别；lab_report = 强制按检验报告解析（图片默认
+  // 走通用候选记录流程，化验单/体检指标照片需手动指定才能提取逐项指标）
+  const [uploadDocType, setUploadDocType] = useState<"auto" | "lab_report">(
+    "auto",
+  );
 
   // Each import begins with the profile currently being viewed. The selection
   // below applies only to this upload and never changes the global profile.
@@ -214,7 +220,13 @@ export default function UploadsPage() {
     );
   const createImport = trpc.importJobs.create.useMutation();
   const deleteImport = trpc.importJobs.delete.useMutation({
-    onSuccess: () => utils.importJobs.list.invalidate(),
+    onSuccess: () => {
+      toast.success("已删除该报告及其全部数据");
+      utils.importJobs.list.invalidate();
+    },
+    onError: (error) => {
+      toast.error(`删除失败：${error.message}`);
+    },
   });
   const reprocessOne = trpc.importJobs.reprocess.useMutation({
     onSuccess: () => {
@@ -296,6 +308,7 @@ export default function UploadsPage() {
           fileSize: file.size,
           profileId: activeProfileId || undefined,
           batchId,
+          documentType: uploadDocType === "lab_report" ? "lab_report" : undefined,
         });
 
         if (result.duplicate) {
@@ -315,7 +328,7 @@ export default function UploadsPage() {
     } finally {
       setUploading(false);
     }
-  }, [files, createImport, utils, activeProfileId, joinBatchId]);
+  }, [files, createImport, utils, activeProfileId, joinBatchId, uploadDocType]);
 
   const selectedProfile = profiles.find((profile) => profile.id === activeProfileId);
   const requestUploadConfirmation = () => {
@@ -441,6 +454,35 @@ export default function UploadsPage() {
 
       {files.length > 0 && (
         <div className="mt-6">
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-neutral-600">解析类型：</span>
+            {(
+              [
+                { value: "auto", label: "自动识别", hint: "系统自动判断文件类型；图片将提取用药/病史/就诊候选记录" },
+                { value: "lab_report", label: "检验报告", hint: "强制按检验报告解析，提取逐项指标（数值/单位/参考范围），适合化验单、体检指标照片" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                title={opt.hint}
+                onClick={() => setUploadDocType(opt.value)}
+                className={cn(
+                  "rounded-lg border px-3 py-1.5 text-[13px] font-medium transition-colors",
+                  uploadDocType === opt.value
+                    ? "border-accent-600 bg-accent-600 text-white"
+                    : "border-neutral-200 bg-white text-neutral-600 hover:border-accent-300 hover:text-accent-600",
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+            <span className="text-[12px] text-neutral-400">
+              {uploadDocType === "lab_report"
+                ? "所有待上传文件都将按检验报告解析（含 PDF）"
+                : "化验单/体检指标图片请选「检验报告」以提取逐项指标"}
+            </span>
+          </div>
           <h2 className="text-sm font-medium text-neutral-900 mb-2">
             待上传文件
           </h2>

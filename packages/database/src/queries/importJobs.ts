@@ -1,6 +1,9 @@
 import { and, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { sourceArtifacts, importJobs } from "../schema/sources";
 import { observations } from "../schema/observations";
+import { medications } from "../schema/medications";
+import { conditions } from "../schema/conditions";
+import { encounters } from "../schema/encounters";
 import type { Database } from "../client";
 
 export async function createImportJob(
@@ -170,8 +173,9 @@ export async function deleteImportJob(
     userId: string;
   },
 ) {
-  // 事务 + 先删 observations：observations.import_job_id 外键为 NO ACTION（无级联），
-  // 若不先删观测，删除已解析出数据的任务会因外键冲突失败（2026-10-08 修复）。
+  // 事务 + 先删全部派生数据：observations 之外，medications/conditions/encounters
+  // 也以 import_job_id 引用本表（FK 均 NO ACTION），漏删任何一张都会让删除整单失败
+  // （2026-10-08 修 observations 级联，2026-10-09 补候选三表）。
   return db.transaction(async (tx) => {
     const [job] = await tx
       .select({
@@ -189,6 +193,15 @@ export async function deleteImportJob(
     await tx
       .delete(observations)
       .where(eq(observations.importJobId, job.id));
+    await tx
+      .delete(medications)
+      .where(eq(medications.importJobId, job.id));
+    await tx
+      .delete(conditions)
+      .where(eq(conditions.importJobId, job.id));
+    await tx
+      .delete(encounters)
+      .where(eq(encounters.importJobId, job.id));
 
     await tx
       .delete(importJobs)
