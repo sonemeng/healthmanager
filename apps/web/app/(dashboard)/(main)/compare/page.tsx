@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc/client";
 import { AnimatedEmptyState } from "@/components/animated-empty-state";
 import {
@@ -12,9 +13,11 @@ import {
   ChevronDown,
   Table2,
   LayoutList,
+  LayoutGrid,
 } from "lucide-react";
+import { DashboardScreen } from "./dashboard-screen";
 
-type CompareMetricRow = {
+export type CompareMetricRow = {
   metricCode: string;
   metricName: string;
   category: string;
@@ -37,7 +40,7 @@ type CompareMetricRow = {
   unitIncomparable: boolean;
 };
 
-type CompareBatch = {
+export type CompareBatch = {
   date: string;
   daysSincePrev: number | null;
   metrics: CompareMetricRow[];
@@ -381,10 +384,27 @@ function BatchTable({ batches }: { batches: CompareBatch[] }) {
 }
 
 export default function ComparePage() {
+  // useSearchParams 需要Suspense 边界（Next App Router 构建要求）
+  return (
+    <Suspense fallback={null}>
+      <ComparePageInner />
+    </Suspense>
+  );
+}
+
+function ComparePageInner() {
+  const searchParams = useSearchParams();
   const { data, isLoading } = trpc.observations.compareBatches.useQuery();
   const batches = data?.batches;
 
-  const [view, setView] = useState<"blocks" | "table">("blocks");
+  // 三视图（spec 17 §1）：批次对比（默认）| 历年总表 | 健康大屏
+  // 支持 /compare?tab=dashboard|table 深链（健康报告页入口跳转用）
+  const initialView = searchParams.get("tab") === "dashboard"
+    ? "dashboard"
+    : searchParams.get("tab") === "table"
+      ? "table"
+      : "blocks";
+  const [view, setView] = useState<"blocks" | "table" | "dashboard">(initialView);
   // null = 用户尚未定制 → 默认展开最新一次（派生状态，不用 effect）
   const [customExpanded, setCustomExpanded] = useState<Set<number> | null>(null);
   const expanded = useMemo(
@@ -452,21 +472,21 @@ export default function ComparePage() {
             </span>
           </p>
         </div>
-        {/* 双视图切换：只有一次检查时隐藏总表视图 */}
-        {batches.length > 1 && (
-          <div className="flex items-center gap-1 border border-neutral-200 bg-neutral-100 p-0.5">
-            <button
-              onClick={() => setView("blocks")}
-              className={cn(
-                "flex h-[30px] items-center gap-1.5 px-3 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors",
-                view === "blocks"
-                  ? "bg-white text-accent-600 shadow-xs"
-                  : "text-neutral-500 hover:text-neutral-900",
-              )}
-            >
-              <LayoutList className="size-3.5" />
-              批次对比
-            </button>
+        {/* 三视图切换：历年总表只在多于一次检查时出现（spec 16 既有口径） */}
+        <div className="flex items-center gap-1 border border-neutral-200 bg-neutral-100 p-0.5">
+          <button
+            onClick={() => setView("blocks")}
+            className={cn(
+              "flex h-[30px] items-center gap-1.5 px-3 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors",
+              view === "blocks"
+                ? "bg-white text-accent-600 shadow-xs"
+                : "text-neutral-500 hover:text-neutral-900",
+            )}
+          >
+            <LayoutList className="size-3.5" />
+            批次对比
+          </button>
+          {batches.length > 1 && (
             <button
               onClick={() => setView("table")}
               className={cn(
@@ -479,8 +499,20 @@ export default function ComparePage() {
               <Table2 className="size-3.5" />
               历年总表
             </button>
-          </div>
-        )}
+          )}
+          <button
+            onClick={() => setView("dashboard")}
+            className={cn(
+              "flex h-[30px] items-center gap-1.5 px-3 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors",
+              view === "dashboard"
+                ? "bg-white text-accent-600 shadow-xs"
+                : "text-neutral-500 hover:text-neutral-900",
+            )}
+          >
+            <LayoutGrid className="size-3.5" />
+            健康大屏
+          </button>
+        </div>
       </div>
 
       {view === "blocks" ? (
@@ -495,8 +527,10 @@ export default function ComparePage() {
             />
           ))}
         </div>
-      ) : (
+      ) : view === "table" ? (
         <BatchTable batches={batches} />
+      ) : (
+        <DashboardScreen batches={batches} />
       )}
     </div>
   );

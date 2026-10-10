@@ -1,13 +1,14 @@
 'use client';
 
 import { useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc/client';
 import { useSession } from '@/lib/auth/client';
 import { deriveStatus } from '@/lib/health-utils';
 import { formatDate, formatObsValue } from '@/lib/utils';
 import { StatusBadge, type HealthStatus } from '@/components/health/status-badge';
 import { MiniSparkline } from '@/components/health/mini-sparkline';
-import { Printer, FileText, Sparkles, Copy, Download } from 'lucide-react';
+import { Printer, FileText, Sparkles, Copy, Download, Utensils } from 'lucide-react';
 import { Button } from '@/components/button';
 import { cn } from '@/lib/utils';
 import { calculateHealthScore } from '@/components/home/health-score';
@@ -86,6 +87,7 @@ export default function ReportsPage() {
   const retests = trpc.testing['retest.getRecommendations'].useQuery();
   const reportRef = useRef<HTMLDivElement>(null);
   const [dateRange, setDateRange] = useState<DateRangeKey>('all');
+  const router = useRouter();
 
   // AI 综合健康分析
   const aiReportQuery = trpc.ai.latestHealthReport.useQuery();
@@ -356,6 +358,12 @@ export default function ReportsPage() {
                 <Button icon={<Copy />} text="复制" variant="secondary" onClick={handleCopyReport} />
               </>
             )}
+            <Button
+              icon={<Utensils />}
+              text="生成饮食建议"
+              variant="secondary"
+              onClick={() => router.push('/compare?tab=dashboard')}
+            />
             <Button
               icon={<Sparkles />}
               text={genReportMutation.isPending ? '生成中…约 30 秒' : '立即生成'}

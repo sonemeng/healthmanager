@@ -9,6 +9,7 @@ export * from "./encounters";
 export * from "./sharing";
 export * from "./audit";
 export * from "./metrics";
+export * from "./diet-plans";
 export * from "./insights";
 export * from "./plugins";
 export * from "./integrations";

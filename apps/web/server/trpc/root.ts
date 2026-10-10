@@ -14,6 +14,8 @@ import { feedbackRouter } from "./routers/feedback";
 import { testingRouter } from "./routers/testing";
 import { conditionsRouter } from "./routers/conditions";
 import { encountersRouter } from "./routers/encounters";
+import { dashboardMetricsRouter } from "./routers/dashboard-metrics";
+import { dietPlansRouter } from "./routers/diet-plans";
 
 export const appRouter = createRouter({
   observations: observationsRouter,
@@ -31,6 +33,8 @@ export const appRouter = createRouter({
   testing: testingRouter,
   conditions: conditionsRouter,
   encounters: encountersRouter,
+  dashboardMetrics: dashboardMetricsRouter,
+  dietPlans: dietPlansRouter,
 });
 
 export type AppRouter = typeof appRouter;

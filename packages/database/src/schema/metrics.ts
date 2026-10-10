@@ -117,6 +117,33 @@ export const userOptimalRanges = pgTable(
   ],
 );
 
+// ── User Dashboard Metrics（健康大屏关注指标）─────────────────────────────────
+
+export const userDashboardMetrics = pgTable(
+  "user_dashboard_metrics",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    metricCode: varchar("metric_code", { length: 50 })
+      .notNull()
+      .references(() => metricDefinitions.id),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    unique("user_dashboard_metrics_user_profile_metric_uniq").on(
+      table.userId,
+      table.profileId,
+      table.metricCode,
+    ),
+    index("user_dashboard_metrics_idx").on(table.userId, table.profileId),
+  ],
+);
+
 // ── Unit Conversions ───────────────────────────────────────────────────────────
 
 export const unitConversions = pgTable(
