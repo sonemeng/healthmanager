@@ -484,7 +484,7 @@ function ComparePageInner() {
             )}
           >
             <LayoutList className="size-3.5" />
-            批次对比
+            检查对比
           </button>
           {batches.length > 1 && (
             <button
@@ -497,7 +497,7 @@ function ComparePageInner() {
               )}
             >
               <Table2 className="size-3.5" />
-              历年总表
+              指标总表
             </button>
           )}
           <button
@@ -510,7 +510,7 @@ function ComparePageInner() {
             )}
           >
             <LayoutGrid className="size-3.5" />
-            健康大屏
+            我的关注
           </button>
         </div>
       </div>

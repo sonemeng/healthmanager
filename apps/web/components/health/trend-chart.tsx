@@ -26,6 +26,8 @@ interface TrendChartProps {
   optimalRangeHigh?: number | null;
   unit?: string | null;
   status?: HealthStatus;
+  /** 图表高度（px），默认 300；嵌入卡片等紧凑场景可传更小值 */
+  height?: number;
 }
 
 const statusStroke: Record<string, string> = {
@@ -57,7 +59,6 @@ function isAbnormal(
 
 interface CustomTooltipProps {
   active?: boolean;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload?: ReadonlyArray<{ value?: any; payload?: any }>;
   label?: string | number;
   referenceRangeLow?: number | null;
@@ -116,7 +117,7 @@ function CustomTooltip({
             className="inline-block h-1.5 w-1.5 rounded-full"
             style={{ backgroundColor: "var(--color-health-warning)" }}
           />
-          Abnormal
+          异常
         </p>
       )}
     </div>
@@ -131,11 +132,12 @@ export function TrendChart({
   optimalRangeHigh,
   unit,
   status = "normal",
+  height = 300,
 }: TrendChartProps) {
   if (data.length === 0) {
     return (
-      <div className="flex h-[300px] items-center justify-center text-sm text-neutral-400">
-        No data points available
+      <div className="flex items-center justify-center text-sm text-neutral-400" style={{ height }}>
+        暂无数据
       </div>
     );
   }
@@ -177,7 +179,7 @@ export function TrendChart({
 
   return (
     <div>
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width="100%" height={height}>
         <LineChart
           data={data}
           margin={{ top: 8, right: 32, bottom: 8, left: 8 }}
@@ -314,7 +316,7 @@ export function TrendChart({
                 }}
               />
               <span className="text-[11px] text-neutral-400 font-mono">
-                Standard
+                参考区间
               </span>
             </div>
           )}
@@ -328,7 +330,7 @@ export function TrendChart({
                 }}
               />
               <span className="text-[11px] text-neutral-400 font-mono">
-                Optimal
+                理想区间
               </span>
             </div>
           )}
