@@ -10,7 +10,7 @@ import {
   Pencil,
   Save,
   History,
-  Download,
+  FileDown,
   Eye,
   Utensils,
   Ban,
@@ -277,7 +277,7 @@ export function DietPlanView() {
             onClick={exportMarkdown}
             className="flex items-center gap-1 rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] text-neutral-600 hover:border-accent-300 hover:text-accent-600"
           >
-            <Download className="size-3" />
+            <FileDown className="size-3" />
             导出
           </button>
           <button
@@ -335,7 +335,7 @@ export function DietPlanView() {
         </div>
       ) : (
         <div className="divide-y divide-neutral-100">
-          {/* 食物分类 */}
+          {/* 食物分类（表格样式） */}
           {(shown.categories ?? []).map((cat) => (
             <section key={cat.category} className="px-5 py-4">
               <h3 className="mb-2 text-[13px] font-semibold text-neutral-800 font-body">
@@ -344,65 +344,93 @@ export function DietPlanView() {
                   {cat.items?.length ?? 0} 项
                 </span>
               </h3>
-              <div className="space-y-1">
-                {(cat.items ?? []).map((item, idx) =>
-                  editingDraft ? (
-                    <div
-                      key={`${cat.category}-${item.name}-${idx}`}
-                      className="grid grid-cols-[auto_1fr] items-start gap-2 rounded border border-neutral-100 bg-neutral-50/60 px-2 py-1.5 sm:grid-cols-[1fr_auto_1fr_2fr]"
-                    >
-                      <span className="truncate text-[12px] font-medium text-neutral-800">
-                        {item.name}
-                      </span>
-                      <select
-                        value={item.level}
-                        onChange={(e) => {
-                          item.level = e.target.value;
-                          setEditingDraft({ ...editingDraft });
-                        }}
-                        className="rounded border border-neutral-200 bg-white px-1.5 py-1 text-[11px]"
-                      >
-                        {LEVELS.map((l) => (
-                          <option key={l} value={l}>{l}</option>
-                        ))}
-                      </select>
-                      <input
-                        value={item.amount ?? ""}
-                        onChange={(e) => {
-                          item.amount = e.target.value;
-                          setEditingDraft({ ...editingDraft });
-                        }}
-                        placeholder="食用量"
-                        className="rounded border border-neutral-200 bg-white px-2 py-1 text-[11px]"
-                      />
-                      <input
-                        value={item.reason ?? ""}
-                        onChange={(e) => {
-                          item.reason = e.target.value;
-                          setEditingDraft({ ...editingDraft });
-                        }}
-                        placeholder="说明"
-                        className="rounded border border-neutral-200 bg-white px-2 py-1 text-[11px]"
-                      />
-                    </div>
-                  ) : (
-                    <div
-                      key={`${cat.category}-${item.name}-${idx}`}
-                      className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-1 py-1 text-[12px] hover:bg-neutral-50"
-                    >
-                      <span className="min-w-0 font-medium text-neutral-800">
-                        {item.name}
-                      </span>
-                      <LevelBadge level={item.level} />
-                      {item.amount && (
-                        <span className="text-neutral-600">{item.amount}</span>
-                      )}
-                      {item.reason && (
-                        <span className="min-w-0 text-neutral-500">—— {item.reason}</span>
-                      )}
-                    </div>
-                  ),
-                )}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] border-collapse">
+                  <thead>
+                    <tr className="border-b border-neutral-200 bg-neutral-50">
+                      {["食物", "推荐程度", "食用量", "说明"].map((h, i) => (
+                        <th
+                          key={h}
+                          className={cn(
+                            "px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.06em] font-mono text-neutral-400",
+                            i === 0 && "w-[22%] text-left",
+                            i === 1 && "w-[9%] text-center",
+                            i === 2 && "w-[26%] text-left",
+                            i === 3 && "text-left",
+                          )}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(cat.items ?? []).map((item, idx) => {
+                      const key = `${cat.category}-${item.name}-${idx}`;
+                      if (editingDraft) {
+                        return (
+                          <tr key={key} className="border-b border-neutral-100 last:border-b-0">
+                            <td className="px-3 py-1.5 text-[12px] font-medium text-neutral-800">
+                              {item.name}
+                            </td>
+                            <td className="px-3 py-1.5 text-center">
+                              <select
+                                value={item.level}
+                                onChange={(e) => {
+                                  item.level = e.target.value;
+                                  setEditingDraft({ ...editingDraft });
+                                }}
+                                className="rounded border border-neutral-200 bg-white px-1.5 py-1 text-[11px]"
+                              >
+                                {LEVELS.map((l) => (
+                                  <option key={l} value={l}>{l}</option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                value={item.amount ?? ""}
+                                onChange={(e) => {
+                                  item.amount = e.target.value;
+                                  setEditingDraft({ ...editingDraft });
+                                }}
+                                placeholder="食用量"
+                                className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-[11px]"
+                              />
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                value={item.reason ?? ""}
+                                onChange={(e) => {
+                                  item.reason = e.target.value;
+                                  setEditingDraft({ ...editingDraft });
+                                }}
+                                placeholder="说明"
+                                className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-[11px]"
+                              />
+                            </td>
+                          </tr>
+                        );
+                      }
+                      return (
+                        <tr key={key} className="border-b border-neutral-100 transition-colors last:border-b-0 hover:bg-neutral-50">
+                          <td className="px-3 py-1.5 text-[12px] font-medium text-neutral-800">
+                            {item.name}
+                          </td>
+                          <td className="px-3 py-1.5 text-center">
+                            <LevelBadge level={item.level} />
+                          </td>
+                          <td className="px-3 py-1.5 text-[12px] text-neutral-700">
+                            {item.amount || "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-[12px] text-neutral-500">
+                            {item.reason || "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </section>
           ))}

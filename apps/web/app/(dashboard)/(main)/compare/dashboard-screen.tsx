@@ -408,36 +408,37 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
                     </div>
                   </div>
 
-                  {/* 行内展开：≥3 次检查画趋势图；1–2 次直接列历次记录（更直白） */}
+                  {/* 行内展开：趋势图（任意次数都画，用户可评估图表形式）+ 历次记录表并列 */}
                   {isExpanded && (
-                    <div className="border-t border-neutral-100 bg-neutral-50/60 px-4 py-3">
+                    <div className="space-y-3 border-t border-neutral-100 bg-neutral-50/60 px-4 py-3">
                       {points.length === 0 ? (
                         <p className="py-3 text-center text-[12px] text-neutral-400">
                           该指标暂无数值记录。
                         </p>
-                      ) : points.length >= 3 ? (
-                        <TrendChart
-                          data={points.map((p) => ({ date: p.date, value: p.value, unit: row?.unit ?? null }))}
-                          referenceRangeLow={row?.referenceRangeLow ?? null}
-                          referenceRangeHigh={row?.referenceRangeHigh ?? null}
-                          unit={row?.unit ?? null}
-                          status={healthStatus}
-                          height={240}
-                        />
                       ) : (
-                        <div>
-                          <p className="mb-2 text-[11px] font-mono text-neutral-400">
-                            历次记录（检查次数不足 3 次，暂不绘制趋势图）
-                          </p>
-                          <div className="card overflow-hidden">
-                            <RecordList
-                              code={s.metricCode}
-                              unit={row?.unit ?? null}
-                              batchesAsc={batchesAsc}
-                              displayPrecision={row?.displayPrecision ?? null}
-                            />
+                        <>
+                          <TrendChart
+                            data={points.map((p) => ({ date: p.date, value: p.value, unit: row?.unit ?? null }))}
+                            referenceRangeLow={row?.referenceRangeLow ?? null}
+                            referenceRangeHigh={row?.referenceRangeHigh ?? null}
+                            unit={row?.unit ?? null}
+                            status={healthStatus}
+                            height={240}
+                          />
+                          <div>
+                            <p className="mb-1.5 text-[11px] font-mono text-neutral-400">
+                              历次记录
+                            </p>
+                            <div className="card overflow-hidden">
+                              <RecordList
+                                code={s.metricCode}
+                                unit={row?.unit ?? null}
+                                batchesAsc={batchesAsc}
+                                displayPrecision={row?.displayPrecision ?? null}
+                              />
+                            </div>
                           </div>
-                        </div>
+                        </>
                       )}
                     </div>
                   )}
