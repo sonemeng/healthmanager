@@ -40,6 +40,13 @@ const LEVEL_STYLES: Record<string, string> = {
 const LEVELS = ["推荐", "适量", "限制", "避免"];
 
 function LevelBadge({ level }: { level: string }) {
+  if (!level) {
+    return (
+      <span className="shrink-0 rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 text-[10px] text-neutral-400">
+        待 AI 评估
+      </span>
+    );
+  }
   const style = LEVEL_STYLES[level] ?? "bg-neutral-50 text-neutral-600 border-neutral-200";
   return (
     <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium", style)}>
@@ -375,6 +382,8 @@ export function DietPlanView() {
                   <tbody>
                     {(cat.items ?? []).map((item, idx) => {
                       const key = `${cat.category}-${item.name}-${idx}`;
+                      // 用户新增行（level 为空标记）：只填名称，档位/食用量/说明由 AI 下次生成时补全
+                      const isNewCustomRow = editingDraft != null && item.level === "";
                       if (editingDraft) {
                         return (
                           <tr key={key} className="border-b border-neutral-100 last:border-b-0">
@@ -385,10 +394,18 @@ export function DietPlanView() {
                                   item.name = e.target.value;
                                   setEditingDraft({ ...editingDraft });
                                 }}
-                                placeholder="食物名"
+                                placeholder="食物名（只需填名称）"
                                 className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-[12px] font-medium"
                               />
                             </td>
+                            {isNewCustomRow ? (
+                              <>
+                                <td colSpan={3} className="px-3 py-1.5 text-[11px] text-neutral-400">
+                                  档位、食用量与说明由 AI 在下次生成时评估补全
+                                </td>
+                              </>
+                            ) : (
+                              <>
                             <td className="px-3 py-1.5 text-center">
                               <select
                                 value={item.level}
@@ -425,6 +442,8 @@ export function DietPlanView() {
                                 className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-[11px]"
                               />
                             </td>
+                              </>
+                            )}
                           </tr>
                         );
                       }
@@ -452,13 +471,13 @@ export function DietPlanView() {
                             onClick={() => {
                               cat.items = [
                                 ...(cat.items ?? []),
-                                { name: "", level: "适量", amount: "", reason: "" },
+                                { name: "", level: "", amount: "", reason: "" },
                               ];
                               setEditingDraft({ ...editingDraft });
                             }}
                             className="flex items-center gap-1 rounded border border-dashed border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-500 transition-colors hover:border-accent-300 hover:text-accent-600"
                           >
-                            + 添加食物
+                            + 添加食物（只需填名称，AI 下次生成时补全档位与说明）
                           </button>
                         </td>
                       </tr>

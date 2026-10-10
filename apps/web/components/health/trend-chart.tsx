@@ -192,6 +192,13 @@ export function TrendChart({
               stroke="var(--color-health-normal-border)"
               strokeDasharray="3 3"
               fillOpacity={0.6}
+              label={{
+                value: "参考区间",
+                position: "insideTop",
+                fontSize: 10,
+                fontFamily: "var(--font-mono)",
+                fill: "var(--color-health-normal)",
+              }}
             />
           )}
           {optimalRangeLow != null && optimalRangeHigh != null && (
@@ -202,6 +209,13 @@ export function TrendChart({
               stroke="var(--color-health-optimal-border)"
               strokeDasharray="4 2"
               fillOpacity={0.4}
+              label={{
+                value: "理想区间",
+                position: "insideTop",
+                fontSize: 10,
+                fontFamily: "var(--font-mono)",
+                fill: "var(--color-health-optimal, var(--color-accent-500))",
+              }}
             />
           )}
           <XAxis
