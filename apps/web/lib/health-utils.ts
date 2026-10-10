@@ -108,7 +108,8 @@ export function formatRange(
   unit?: string | null,
 ): string {
   const u = unit ?? "";
-  if (low != null && high != null) return `${low} – ${high} ${u}`.trim();
+  // 中文语境用「~」连接区间（en-dash 在部分中文字体下显示异常，用户实测观感如乱码）
+  if (low != null && high != null) return `${low}~${high} ${u}`.trim();
   if (low != null) return `> ${low} ${u}`.trim();
   if (high != null) return `< ${high} ${u}`.trim();
   return "—";

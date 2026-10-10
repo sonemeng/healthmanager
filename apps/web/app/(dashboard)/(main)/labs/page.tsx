@@ -23,6 +23,11 @@ export default function LabsPage() {
   const precisionMap = new Map(
     (metricsData ?? []).map((m) => [m.id, m.displayPrecision] as const),
   );
+  // 字典中文名映射（自学习 auto_* 条目同样有中文名）；无字典命中才退回 code
+  const nameMap = new Map(
+    (metricsData ?? []).map((m) => [m.id, m.name] as const),
+  );
+  const displayName = (code: string) => nameMap.get(code) ?? formatMetricName(code);
   const items = data?.items ?? [];
 
   if (isLoading) {
@@ -108,7 +113,7 @@ export default function LabsPage() {
 
   // Subtitle
   const uniqueMetrics = byMetric.size;
-  const subtitle = `${uniqueMetrics} unique metric${uniqueMetrics !== 1 ? 's' : ''} · ${items.length} total results`;
+  const subtitle = `${uniqueMetrics} 项指标 · ${items.length} 条结果`;
 
   return (
     <div className="stagger-children">
@@ -131,7 +136,7 @@ export default function LabsPage() {
                   o.unit,
                   o.referenceRangeLow,
                   o.referenceRangeHigh,
-                  o.isAbnormal ? 'Yes' : 'No',
+                  o.isAbnormal ? '是' : '否',
                   new Date(o.observedAt).toISOString().split('T')[0],
                   o.category,
                 ]),
@@ -147,12 +152,12 @@ export default function LabsPage() {
           {topMetrics.map((mg) => (
             <MetricCard
               key={mg.code}
-              title={formatMetricName(mg.code)}
+              title={displayName(mg.code)}
               value={formatObsValue(mg.code, mg.latest.valueNumeric, mg.latest.valueText, precisionMap.get(mg.code))}
               unit={isDurationMetric(mg.code) ? '' : (mg.latest.unit ?? '')}
               delta={
                 mg.deltaVal
-                  ? `${mg.deltaVal % 1 === 0 ? mg.deltaVal : mg.deltaVal.toFixed(1)} from last`
+                  ? `较上次 ${mg.deltaVal % 1 === 0 ? mg.deltaVal : mg.deltaVal.toFixed(1)}`
                   : '无历史'
               }
               deltaDirection={mg.deltaDir}
@@ -168,14 +173,14 @@ export default function LabsPage() {
         {metricGroups.map((mg) => {
           const statusLabel =
             mg.status === 'normal'
-              ? 'Normal'
+              ? '正常'
               : getAbnormalityLabel(mg.status, deriveDirection(mg.latest));
 
           return (
             <MetricSummaryCard
               key={mg.code}
               metricCode={mg.code}
-              name={formatMetricName(mg.code)}
+              name={displayName(mg.code)}
               latestValue={formatObsValue(mg.code, mg.latest.valueNumeric, mg.latest.valueText, precisionMap.get(mg.code))}
               unit={isDurationMetric(mg.code) ? '' : (mg.latest.unit ?? '')}
               status={mg.status}

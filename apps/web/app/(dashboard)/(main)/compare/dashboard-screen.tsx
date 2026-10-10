@@ -7,7 +7,7 @@ import { Template } from "@/components/modal/template";
 import { StatusBadge } from "@/components/health/status-badge";
 import { TrendChart } from "@/components/health/trend-chart";
 import { MiniSparkline } from "@/components/health/mini-sparkline";
-import { deriveStatus, deriveDirection, getAbnormalityLabel } from "@/lib/health-utils";
+import { deriveStatus, deriveDirection, getAbnormalityLabel, formatRange } from "@/lib/health-utils";
 import { cn, formatObsValue } from "@/lib/utils";
 import {
   Plus,
@@ -303,8 +303,8 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
               const points = historyFor(s.metricCode);
               const healthStatus = row ? deriveStatus(row) : "normal";
               const rangeText =
-                row?.referenceRangeLow != null && row?.referenceRangeHigh != null
-                  ? `参考 ${row.referenceRangeLow}–${row.referenceRangeHigh}${row.unit ? " " + row.unit : ""}`
+                row?.referenceRangeLow != null || row?.referenceRangeHigh != null
+                  ? `参考 ${formatRange(row.referenceRangeLow, row.referenceRangeHigh, row.unit)}`
                   : "无参考区间";
               const isExpanded = expandedCode === s.metricCode;
 

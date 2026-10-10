@@ -135,7 +135,15 @@ export function DietPlanView() {
 
   const saveEditing = () => {
     if (!editingDraft || !activeId) return;
-    updateMutation.mutate({ id: activeId, editedJson: editingDraft });
+    // 清洗：剔除名称为空的手动增项行（避免误存空行）
+    const cleaned: DietPlanContent = {
+      ...editingDraft,
+      categories: (editingDraft.categories ?? []).map((cat) => ({
+        ...cat,
+        items: (cat.items ?? []).filter((it) => it.name.trim().length > 0),
+      })),
+    };
+    updateMutation.mutate({ id: activeId, editedJson: cleaned });
   };
 
   const exportMarkdown = () => {
@@ -370,8 +378,16 @@ export function DietPlanView() {
                       if (editingDraft) {
                         return (
                           <tr key={key} className="border-b border-neutral-100 last:border-b-0">
-                            <td className="px-3 py-1.5 text-[12px] font-medium text-neutral-800">
-                              {item.name}
+                            <td className="px-2 py-1.5">
+                              <input
+                                value={item.name}
+                                onChange={(e) => {
+                                  item.name = e.target.value;
+                                  setEditingDraft({ ...editingDraft });
+                                }}
+                                placeholder="食物名"
+                                className="w-full rounded border border-neutral-200 bg-white px-2 py-1 text-[12px] font-medium"
+                              />
                             </td>
                             <td className="px-3 py-1.5 text-center">
                               <select
@@ -429,6 +445,24 @@ export function DietPlanView() {
                         </tr>
                       );
                     })}
+                    {editingDraft && (
+                      <tr>
+                        <td colSpan={4} className="px-3 py-1.5">
+                          <button
+                            onClick={() => {
+                              cat.items = [
+                                ...(cat.items ?? []),
+                                { name: "", level: "适量", amount: "", reason: "" },
+                              ];
+                              setEditingDraft({ ...editingDraft });
+                            }}
+                            className="flex items-center gap-1 rounded border border-dashed border-neutral-300 px-2.5 py-1 text-[11px] text-neutral-500 transition-colors hover:border-accent-300 hover:text-accent-600"
+                          >
+                            + 添加食物
+                          </button>
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

@@ -52,6 +52,28 @@ function parseModelJson(text: string): unknown {
   }
 }
 
+// 收集用户在历史存档编辑版（editedJson）中手动添加过的自定义食物
+// （不在预置候选池的名称 → 下次生成时并入候选池，spec 17 用户增项需求）
+function collectCustomFoods(archives: Array<{ editedJson: unknown }>): string[] {
+  const presetNames = new Set(FOOD_CANDIDATES.map((f) => f.name));
+  const custom = new Set<string>();
+  for (const row of archives) {
+    const source = row.editedJson;
+    if (!source || typeof source !== 'object') continue;
+    const categories = (source as Record<string, unknown>).categories;
+    if (!Array.isArray(categories)) continue;
+    for (const cat of categories as Array<Record<string, unknown>>) {
+      const items = cat.items;
+      if (!Array.isArray(items)) continue;
+      for (const item of items as Array<Record<string, unknown>>) {
+        const name = typeof item.name === 'string' ? item.name.trim() : '';
+        if (name && !presetNames.has(name)) custom.add(name);
+      }
+    }
+  }
+  return Array.from(custom);
+}
+
 // 校验生成的 JSON 结构（宽松：字段存在 + level 合法）
 function validatePlan(plan: unknown): void {
   if (!plan || typeof plan !== 'object') throw new Error('模型输出为空');
@@ -190,7 +212,24 @@ export const dietPlansRouter = createRouter({
       ? `姓名：${p.name}；性别：${p.gender ?? '未填写'}；出生日期：${p.birthDate ?? '未填写'}；过敏史：${p.allergies ?? '无记录'}`
       : '档案信息不完整';
 
-    const userPrompt = `【成员档案】\n${profileText}\n\n【病史】\n${condsText}\n\n【在用药物（判断药物-食物相互作用必需）】\n${medsText}\n\n【最新一次检查（${batchDate}）的全部指标】\n${metricLines}\n\n【候选食物池（只能从中选择食物）】\n${formatFoodPool()}\n\n【禁止事项池（只能从中挑选适用条目，结合本人用药/指标改写原因）】\n${formatForbiddenPool()}\n\n请为该成员生成个性化饮食清单 JSON。`;
+    // 用户手动添加过的自定义食物（历史存档编辑版）→ 并入候选池
+    const archives = await ctx.db
+      .select({ editedJson: dietPlans.editedJson })
+      .from(dietPlans)
+      .where(
+        and(
+          eq(dietPlans.userId, ctx.userId),
+          eq(dietPlans.profileId, profileId),
+        ),
+      )
+      .orderBy(desc(dietPlans.generatedAt))
+      .limit(20);
+    const customFoods = collectCustomFoods(archives);
+    const customPoolText = customFoods.length > 0
+      ? `\n\n【用户自定义食物（同样只能从以下名称中选，需正常评估给档位）】\n${customFoods.map((n) => `- ${n}`).join('\n')}`
+      : '';
+
+    const userPrompt = `【成员档案】\n${profileText}\n\n【病史】\n${condsText}\n\n【在用药物（判断药物-食物相互作用必需）】\n${medsText}\n\n【最新一次检查（${batchDate}）的全部指标】\n${metricLines}\n\n【候选食物池（只能从中选择食物）】\n${formatFoodPool()}${customPoolText}\n\n【禁止事项池（只能从中挑选适用条目，结合本人用药/指标改写原因）】\n${formatForbiddenPool()}\n\n请为该成员生成个性化饮食清单 JSON。`;
 
     // 4. 渠道与模型（同健康报告链路）
     const [user] = await ctx.db
