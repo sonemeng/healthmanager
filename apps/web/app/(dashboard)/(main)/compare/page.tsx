@@ -16,6 +16,7 @@ import {
   LayoutGrid,
 } from "lucide-react";
 import { DashboardScreen } from "./dashboard-screen";
+import { ChangeTopN } from "@/components/health/change-topn";
 
 export type CompareMetricRow = {
   metricCode: string;
@@ -516,16 +517,26 @@ function ComparePageInner() {
       </div>
 
       {view === "blocks" ? (
-        <div className="space-y-3">
-          {batches.map((batch, i) => (
-            <BatchCard
-              key={batch.date}
-              batch={batch}
-              isLatest={i === 0}
-              expanded={expanded.has(i)}
-              onToggle={() => toggle(i)}
+        <div className="space-y-4">
+          {/* 变化幅度 Top-N：最新一次 vs 上一次，按生物指标分类分组，每类 |Δ%| 前 10（spec 18 §3） */}
+          {batches.length > 1 && batches[0] && (
+            <ChangeTopN
+              metrics={batches[0].metrics}
+              curDate={batches[0].date}
+              prevDate={batches[1]?.date ?? null}
             />
-          ))}
+          )}
+          <div className="space-y-3">
+            {batches.map((batch, i) => (
+              <BatchCard
+                key={batch.date}
+                batch={batch}
+                isLatest={i === 0}
+                expanded={expanded.has(i)}
+                onToggle={() => toggle(i)}
+              />
+            ))}
+          </div>
         </div>
       ) : view === "table" ? (
         <BatchTable batches={batches} />
