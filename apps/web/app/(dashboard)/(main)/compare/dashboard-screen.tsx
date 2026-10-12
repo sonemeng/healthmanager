@@ -18,7 +18,7 @@ import {
   CircleAlert,
   Search,
 } from "lucide-react";
-import type { CompareBatch } from "./page";
+import type { CompareBatch, CompareMetricRow } from "./page";
 import { DietPlanView } from "./diet-plan-view";
 
 // 我的关注（spec 17 §1）：样式对齐全站「需要关注」列表行模式
@@ -190,9 +190,22 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
   // 正序时间线（趋势图 / 历次列表用）
   const batchesAsc = useMemo(() => [...batches].reverse(), [batches]);
 
-  const latestByName = useMemo(() => {
-    const map = new Map<string, (typeof batches)[number]["metrics"][number]>();
-    for (const m of batches[0]?.metrics ?? []) map.set(m.metricCode, m);
+  // 最近实测行（spec 19 §2 A1）：按批次倒序扫描，跳过 presence='missing' 占位行
+  // 与无值行，取每指标最近一次真实测行。占位行（本次未查）不再被误显示为「正常」。
+  const latestMeasured = useMemo(() => {
+    const map = new Map<
+      string,
+      { row: CompareMetricRow; date: string; isFromLatestBatch: boolean }
+    >();
+    for (let i = 0; i < batches.length; i++) {
+      const b = batches[i]!;
+      for (const m of b.metrics) {
+        if (map.has(m.metricCode)) continue;
+        if (m.presence === "missing") continue;
+        if (m.value == null && !m.valueText) continue;
+        map.set(m.metricCode, { row: m, date: b.date, isFromLatestBatch: i === 0 });
+      }
+    }
     return map;
   }, [batches]);
 
@@ -295,7 +308,8 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
           {/* 指标行 */}
           <div className="divide-y divide-neutral-100">
             {saved.map((s) => {
-              const row = latestByName.get(s.metricCode);
+              const measured = latestMeasured.get(s.metricCode);
+              const row = measured?.row ?? null;
               const metricName =
                 row?.metricName ??
                 (metricsData ?? []).find((m) => m.id === s.metricCode)?.name ??
@@ -326,13 +340,15 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
                             {metricName}
                           </span>
                           {row ? (
-                            row.isAbnormal ? (
+                            row.isAbnormal === true ? (
                               <StatusBadge
                                 status={healthStatus}
                                 label={getAbnormalityLabel(healthStatus, deriveDirection(row))}
                               />
-                            ) : (
+                            ) : row.isAbnormal === false ? (
                               <StatusBadge status="normal" label="正常" />
+                            ) : (
+                              <StatusBadge status="neutral" label="未判定" />
                             )
                           ) : (
                             <StatusBadge status="neutral" label="无数据" />
@@ -340,6 +356,11 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
                         </div>
                         <span className="mt-0.5 block truncate text-[10px] font-mono text-neutral-400">
                           {rangeText}
+                          {measured && !measured.isFromLatestBatch && (
+                            <>
+                              {" · "}上次检查 {measured.date}
+                            </>
+                          )}
                           {row?.prevDate && row.prevValue != null && (
                             <>
                               {" · "}上次 {formatObsValue(s.metricCode, row.prevValue, row.prevValueText, row.displayPrecision)}

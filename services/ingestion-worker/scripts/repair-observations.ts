@@ -181,7 +181,7 @@ async function main() {
   const rangesByMetric = new Map<string, DemographicRange[]>();
   for (const r of ranges) {
     const list = rangesByMetric.get(r.metricCode) ?? [];
-    list.push({ sex: r.sex, ageMin: r.ageMin, ageMax: r.ageMax, rangeLow: r.rangeLow, rangeHigh: r.rangeHigh });
+    list.push({ sex: r.sex, ageMin: r.ageMin, ageMax: r.ageMax, rangeLow: r.rangeLow, rangeHigh: r.rangeHigh, unit: r.unit ?? null });
     rangesByMetric.set(r.metricCode, list);
   }
   const metricDefs = metrics.map((m) => ({

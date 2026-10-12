@@ -35,11 +35,31 @@ function formatRange(
   unit: string | null,
 ): string {
   const u = unit ?? "";
-  if (low != null && high != null) return `${low}–${high} ${u}`.trim();
+  // 连接符用「~」与全站共享版一致（en-dash 在部分中文字体下显示异常）
+  if (low != null && high != null) return `${low}~${high} ${u}`.trim();
   if (low != null) return `> ${low} ${u}`.trim();
   if (high != null) return `< ${high} ${u}`.trim();
   return "—";
 }
+
+// 来源分组（spec 19 §3.4）：国标 → 指南/平台 → 通行口径 → 化验单学习
+function sourceGroup(source: string | null): { order: number; label: string } {
+  if (source === "化验单学习") return { order: 3, label: "化验单学习（你的检验科，带单位）" };
+  if (source?.startsWith("WS/T")) return { order: 0, label: "国家标准" };
+  if (source === "通行口径") return { order: 2, label: "通行口径" };
+  return { order: 1, label: "指南/平台口径" };
+}
+
+// 方法依赖项（spec 19 附录 ➖ 类）：无通行国标、检验系统各不相同——统一标「以报告单为准」
+const METHOD_DEPENDENT = new Set([
+  "tsh", "free_t3", "free_t4", "total_t3", "total_t4", "tpo_antibodies", "reverse_t3",
+  "ck_mb", "troponin_i", "bnp", "free_testosterone", "dhea_s", "leptin", "oxidized_ldl",
+  "ca199", "ca153", "cholinesterase", "rdw_sd", "fructosamine", "lipase",
+  "bun_creatinine_ratio", "vldl_cholesterol", "ldl_particle_number", "shbg", "amh", "igf_1",
+]);
+
+// 月经周期分期激素（spec 19 §9-⑥）：单一区间会造成错判，区间不进判定列，展示分期口径
+const CYCLE_PHASE_METRICS = new Set(["fsh", "lh", "estradiol", "progesterone"]);
 
 export default function BiomarkersPage() {
   const { data: metrics, isLoading: metricsLoading } =
@@ -336,12 +356,20 @@ export default function BiomarkersPage() {
 
                         {/* Metric rows */}
                         {catMetrics.map((m) => {
-                          const metricRanges = rangesByMetric.get(m.id) ?? [];
+                          const metricRanges = [...(rangesByMetric.get(m.id) ?? [])]
+                            .sort((a, b) => {
+                              const ga = sourceGroup(a.source);
+                              const gb = sourceGroup(b.source);
+                              if (ga.order !== gb.order) return ga.order - gb.order;
+                              return (a.id ?? 0) - (b.id ?? 0);
+                            });
                           const hasDemographicRanges = metricRanges.length > 0;
                           const isMetricExpanded = expandedMetric === m.id;
                           const aliasList = m.aliases.slice(0, 4);
                           const moreAliases =
                             m.aliases.length > 4 ? m.aliases.length - 4 : 0;
+                          const isMethodDependent = METHOD_DEPENDENT.has(m.id);
+                          const isCyclePhase = CYCLE_PHASE_METRICS.has(m.id);
 
                           return (
                             <div key={m.id}>
@@ -364,6 +392,16 @@ export default function BiomarkersPage() {
                                         status="info"
                                         label={`${metricRanges.length} range${metricRanges.length !== 1 ? "s" : ""}`}
                                       />
+                                    )}
+                                    {isMethodDependent && (
+                                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500">
+                                        以报告单为准
+                                      </span>
+                                    )}
+                                    {isCyclePhase && (
+                                      <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500">
+                                        月经周期分期
+                                      </span>
                                     )}
                                   </div>
                                   {m.description && (
@@ -425,6 +463,23 @@ export default function BiomarkersPage() {
                                     </div>
                                   )}
 
+                                  {/* 口径说明（spec 19）：默认区间的来源/分期表/分层文本 */}
+                                  {m.referenceRangeText && (
+                                    <div className="mb-3 text-[11px] leading-relaxed text-neutral-500 font-mono">
+                                      {m.referenceRangeText}
+                                    </div>
+                                  )}
+                                  {isMethodDependent && (
+                                    <div className="mb-3 text-[11px] text-amber-700 font-mono">
+                                      检验方法依赖项：区间随仪器/试剂/厂商不同，以你的报告单为准。
+                                    </div>
+                                  )}
+                                  {isCyclePhase && (
+                                    <div className="mb-3 text-[11px] text-amber-700 font-mono">
+                                      月经第 2-4 天（卵泡期）采血口径，其他阶段以报告单为准。
+                                    </div>
+                                  )}
+
                                   {metricRanges.length > 0 ? (
                                     <div>
                                       <div className="mb-2 text-[12px] font-medium text-neutral-700 font-body">
@@ -446,53 +501,67 @@ export default function BiomarkersPage() {
                                             </div>
                                           ))}
                                         </div>
-                                        {metricRanges.map((r) => {
+                                        {metricRanges.map((r, idx) => {
                                           const isUserMatch =
                                             userSex &&
                                             (r.sex === null ||
                                               r.sex === userSex);
+                                          // 分组头（spec 19 §3.4）：组切换时插一行来源组标题
+                                          const group = sourceGroup(r.source);
+                                          const prevGroup =
+                                            idx > 0
+                                              ? sourceGroup(metricRanges[idx - 1]!.source)
+                                              : null;
+                                          const showGroupHeader =
+                                            prevGroup === null || prevGroup.order !== group.order;
 
                                           return (
-                                            <div
-                                              key={r.id}
-                                              className={`grid grid-cols-[1fr_1fr_1fr_1.2fr] items-center gap-3 border-b border-neutral-100 px-4 py-2.5 ${
-                                                isUserMatch
-                                                  ? "bg-accent-50/40"
-                                                  : ""
-                                              }`}
-                                            >
-                                              <div className="flex items-center gap-1.5">
-                                                <span className="text-xs text-neutral-700 font-mono">
-                                                  {r.sex
-                                                    ? r.sex
-                                                        .charAt(0)
-                                                        .toUpperCase() +
-                                                      r.sex.slice(1)
-                                                    : "Any"}
-                                                </span>
-                                                {isUserMatch && r.sex && (
-                                                  <span className="inline-block size-1.5 rounded-full bg-accent-500" />
-                                                )}
-                                              </div>
-                                              <div className="text-xs text-neutral-600 font-mono">
-                                                {r.ageMin != null &&
-                                                r.ageMax != null
-                                                  ? `${r.ageMin}–${r.ageMax}`
-                                                  : r.ageMin != null
-                                                    ? `${r.ageMin}+`
-                                                    : r.ageMax != null
-                                                      ? `≤ ${r.ageMax}`
+                                            <div key={r.id}>
+                                              {showGroupHeader && (
+                                                <div className="border-b border-neutral-100 bg-neutral-50/60 px-4 py-1.5 text-[10px] font-medium text-neutral-400 font-mono">
+                                                  {group.label}
+                                                </div>
+                                              )}
+                                              <div
+                                                className={`grid grid-cols-[1fr_1fr_1fr_1.2fr] items-center gap-3 border-b border-neutral-100 px-4 py-2.5 ${
+                                                  isUserMatch
+                                                    ? "bg-accent-50/40"
+                                                    : ""
+                                                }`}
+                                              >
+                                                <div className="flex items-center gap-1.5">
+                                                  <span className="text-xs text-neutral-700 font-mono">
+                                                    {r.sex
+                                                      ? r.sex
+                                                          .charAt(0)
+                                                          .toUpperCase() +
+                                                        r.sex.slice(1)
                                                       : "Any"}
-                                              </div>
-                                              <div className="text-xs font-medium text-neutral-900 font-mono">
-                                                {formatRange(
-                                                  r.rangeLow,
-                                                  r.rangeHigh,
-                                                  m.unit,
-                                                )}
-                                              </div>
-                                              <div className="text-[11px] text-neutral-400 font-mono">
-                                                {r.source ?? "—"}
+                                                  </span>
+                                                  {isUserMatch && r.sex && (
+                                                    <span className="inline-block size-1.5 rounded-full bg-accent-500" />
+                                                  )}
+                                                </div>
+                                                <div className="text-xs text-neutral-600 font-mono">
+                                                  {r.ageMin != null &&
+                                                  r.ageMax != null
+                                                    ? `${r.ageMin}~${r.ageMax}`
+                                                    : r.ageMin != null
+                                                      ? `${r.ageMin}+`
+                                                      : r.ageMax != null
+                                                        ? `≤ ${r.ageMax}`
+                                                        : "Any"}
+                                                </div>
+                                                <div className="text-xs font-medium text-neutral-900 font-mono">
+                                                  {formatRange(
+                                                    r.rangeLow,
+                                                    r.rangeHigh,
+                                                    r.unit ?? m.unit,
+                                                  )}
+                                                </div>
+                                                <div className="text-[11px] text-neutral-400 font-mono">
+                                                  {r.source ?? "—"}
+                                                </div>
                                               </div>
                                             </div>
                                           );
@@ -501,8 +570,7 @@ export default function BiomarkersPage() {
                                     </div>
                                   ) : (
                                     <div className="text-[12px] text-neutral-400 font-body">
-                                      无分性别人群参考区间 — using
-                                      default range only.
+                                      无分性别人群参考区间——仅使用默认区间。
                                     </div>
                                   )}
                                 </div>

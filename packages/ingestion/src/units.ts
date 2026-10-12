@@ -165,8 +165,28 @@ export const MAGNITUDE_BANDS: Record<string, MagnitudeBand> = {
   'specific_gravity@': { low: 1.0, high: 1.04, note: '报告原文 1.003-1.035' },
   'total_protein@g/L': { low: 60, high: 85, note: '报告原文 60-85' },
   'uric_acid@mg/dL': { low: 4.6, high: 8, note: '报告原文 4.6-8' },
-  'uric_acid@µmol/L': { low: 140, high: 380, note: '报告原文 140-380' },
+  'uric_acid@µmol/L': { low: 140, high: 450, note: '报告原文 140-380；放宽上限至 450 覆盖男性国标 208~428（spec 19 §3.3）' },
   'wbc@10^9/L': { low: 3.5, high: 9.5, note: '报告原文 3.5-9.5' },
+  // ── spec 19 §3.3 新增带（字典中国化后的国标/通行区间量级；数值来源 = 附录对照表）──
+  // 单侧区间的中点判定：checkMagnitudeBand 对缺失一侧回退到带边界，故带宽须覆盖国标单侧行的中点。
+  'albumin@g/L': { low: 35, high: 55, note: '国标 40~55 / 报告原文带 35~55' },
+  'apoa1@g/L': { low: 1.0, high: 1.6, note: '通行 1.00~1.60' },
+  'apob@g/L': { low: 0.6, high: 1.1, note: '通行 0.60~1.10' },
+  'bilirubin_total@µmol/L': { low: 1.7, high: 26, note: '国标单侧 男≤26/女≤21 与通行双侧 3.4~17.1 的合集带' },
+  'c_peptide@nmol/L': { low: 0.3, high: 1.3, note: '通行 0.3~1.3（空腹）' },
+  'cholesterol_total@mmol/L': { low: 2.5, high: 5.2, note: '血脂指南合适水平 ≤5.2（单侧）' },
+  'copper@µmol/L': { low: 11, high: 22, note: '通行 11.0~22.0' },
+  'cortisol@nmol/L': { low: 171, high: 536, note: '通行 171~536（上午 8 时）' },
+  'fibrinogen@g/L': { low: 2, high: 4, note: '通行 2~4' },
+  'folate@ng/mL': { low: 5.4, high: 18, note: '通行 5.4~18.0（血清叶酸）' },
+  'hdl@mmol/L': { low: 0.8, high: 2.0, note: '血脂指南合适水平 ≥1.0（单侧下限）' },
+  'ldl@mmol/L': { low: 1.5, high: 3.4, note: '血脂指南合适水平 ≤3.4（单侧）' },
+  'lp_a@mg/L': { low: 0, high: 300, note: '通行 <300（单侧）' },
+  'non_hdl@mmol/L': { low: 1.8, high: 4.1, note: '血脂指南合适水平 ≤4.1（单侧）' },
+  'pth@pg/mL': { low: 12, high: 88, note: '通行 15~65 / 报告原文 12-88' },
+  'testosterone@nmol/L': { low: 1.3, high: 29, note: '通行 男 8.64~29.0 / 女 1.3~2.8' },
+  'triglycerides@mmol/L': { low: 0.4, high: 1.7, note: '血脂指南合适水平 ≤1.7（单侧）' },
+  'zinc@µmol/L': { low: 11.5, high: 18.4, note: '通行 11.5~18.4' },
 };
 
 /**

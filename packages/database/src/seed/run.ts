@@ -12,6 +12,7 @@ import {
   panelTemplateMetrics,
 } from "../schema/testing";
 import { metricDefinitionSeeds } from "./data/metric-definitions";
+import { CHINA_DICT_OVERRIDES } from "./data/china-overrides";
 import { referenceRangeSeeds } from "./data/reference-ranges";
 import { optimalRangeSeeds } from "./data/optimal-ranges";
 import { labProviderSeeds } from "./data/lab-providers";
@@ -24,9 +25,15 @@ async function main() {
   const db = getDb();
 
   console.log("Seeding metric definitions...");
+  // 字典中国化覆盖（spec 19）：与迁移 0018 的 UPDATE VALUES 同口径——
+  // seed 只管新装机，存量库靠迁移；两处数值必须逐条一致（单一底册：19-附录）。
+  const metricSeeds = metricDefinitionSeeds.map((m) => {
+    const override = CHINA_DICT_OVERRIDES[m.id];
+    return override ? { ...m, ...override } : m;
+  });
   await db
     .insert(metricDefinitions)
-    .values(metricDefinitionSeeds)
+    .values(metricSeeds)
     .onConflictDoNothing();
 
   console.log("Seeding reference ranges...");

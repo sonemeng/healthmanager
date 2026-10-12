@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { eq, and, inArray, ne, or, isNotNull, asc } from 'drizzle-orm';
+import { eq, and, inArray, ne, or, isNotNull, isNull, asc } from 'drizzle-orm';
 import { createRouter, protectedProcedure } from '../init';
+import type { Database } from '@openvitals/database/client';
 import {
   listObservations,
   getObservationTrend,
@@ -9,10 +10,70 @@ import {
   observations,
   importJobs,
   metricDefinitions,
+  referenceRanges,
   unitConversions,
 } from '@openvitals/database';
 import { emitEvent } from '@openvitals/events';
 import { getActiveProfileId } from '../active-profile';
+
+/**
+ * 化验单区间学习入库（spec 19 §4 C2）：
+ * 被确认/纠正的观测行带报告原文区间时，先查后插写入「化验单学习」行——
+ * 幂等键 = (metric_code, unit, low, high, source)；无单位或无区间不收
+ * （unit NULL 保留给字典基准行）。失败不阻断确认/纠正主流程（崩溃安全）。
+ */
+async function ensureLearnedRange(
+  db: Database,
+  row: {
+    metricCode: string | null;
+    unit: string | null;
+    rangeLow: number | null;
+    rangeHigh: number | null;
+  },
+): Promise<void> {
+  try {
+    const { metricCode, unit, rangeLow, rangeHigh } = row;
+    if (!metricCode) return;
+    if (!unit || unit.trim() === '') return;
+    if (rangeLow === null && rangeHigh === null) return;
+
+    const existing = await db
+      .select({ id: referenceRanges.id })
+      .from(referenceRanges)
+      .where(
+        and(
+          eq(referenceRanges.metricCode, metricCode),
+          eq(referenceRanges.unit, unit),
+          eq(referenceRanges.source, '化验单学习'),
+          rangeLow === null
+            ? isNull(referenceRanges.rangeLow)
+            : eq(referenceRanges.rangeLow, rangeLow),
+          rangeHigh === null
+            ? isNull(referenceRanges.rangeHigh)
+            : eq(referenceRanges.rangeHigh, rangeHigh),
+        ),
+      )
+      .limit(1);
+    if (existing.length > 0) return;
+
+    await db
+      .insert(referenceRanges)
+      .values({
+        metricCode,
+        sex: null,
+        ageMin: null,
+        ageMax: null,
+        rangeLow,
+        rangeHigh,
+        rangeText: null,
+        source: '化验单学习',
+        unit,
+      })
+      .onConflictDoNothing();
+  } catch (err) {
+    console.error('[observations] ensureLearnedRange failed:', err instanceof Error ? err.message : err);
+  }
+}
 
 export const observationsRouter = createRouter({
   list: protectedProcedure
@@ -357,6 +418,15 @@ export const observationsRouter = createRouter({
         changes.unit = { from: current.unit, to: corrections.unit };
       }
 
+      // 化验单区间学习（spec 19 §4）：纠正后的行代表用户认可的数据——
+      // metricCode/unit 取纠正后的值，区间取行上的报告原文区间（correct 不改区间列）。
+      await ensureLearnedRange(ctx.db, {
+        metricCode: corrections.metricCode ?? current.metricCode,
+        unit: corrections.unit ?? current.unit,
+        rangeLow: current.referenceRangeLow,
+        rangeHigh: current.referenceRangeHigh,
+      });
+
       emitEvent({
         type: 'observation.corrected',
         payload: {
@@ -378,11 +448,26 @@ export const observationsRouter = createRouter({
         .update(observations)
         .set({ status: 'confirmed', updatedAt: new Date() })
         .where(and(eq(observations.id, input.id), eq(observations.userId, ctx.userId)))
-        .returning({ importJobId: observations.importJobId });
+        .returning({
+          importJobId: observations.importJobId,
+          metricCode: observations.metricCode,
+          unit: observations.unit,
+          rangeLow: observations.referenceRangeLow,
+          rangeHigh: observations.referenceRangeHigh,
+        });
 
       if (!result.length) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Observation not found' });
       }
+
+      // 化验单区间学习（spec 19 §4）：确认 = 用户背书该报告原文区间 → 先查后插学习行
+      const confirmed = result[0]!;
+      await ensureLearnedRange(ctx.db, {
+        metricCode: confirmed.metricCode,
+        unit: confirmed.unit,
+        rangeLow: confirmed.rangeLow,
+        rangeHigh: confirmed.rangeHigh,
+      });
 
       // Do not complete an import while an unmatched item still needs a user decision.
       const jobId = result[0]!.importJobId;
