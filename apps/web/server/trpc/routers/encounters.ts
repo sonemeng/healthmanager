@@ -1,17 +1,15 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { eq, and, desc, lte, gte, or, isNull } from 'drizzle-orm';
+import { eq, and, desc, asc } from 'drizzle-orm';
 import { createRouter, protectedProcedure } from '../init';
-import { encounters, medications, conditions } from '@openvitals/database';
+import { encounters, followUpReminders } from '@openvitals/database';
 import { getActiveProfileId } from '../active-profile';
 import {
-  fetchBatchRows,
-  fetchConversions,
-  groupRowsByDay,
-  compareTwoDays,
-  dayKeyOf,
-  type BatchMetricRow,
-} from '../../data/batch-compare';
+  loadEncounter,
+  buildEncounterHub,
+  buildEncounterComparison,
+} from '../../data/encounter-hub';
+import { ensureFollowUpReminder } from '../../data/follow-up';
 
 const encounterTypes = [
   'checkup',
@@ -26,19 +24,20 @@ const encounterTypes = [
   'other',
 ] as const;
 
-// 日期字符串（YYYY-MM-DD）加减天数 → dayKey
-function addDaysKey(dateKey: string, days: number): string {
-  const d = new Date(`${dateKey}T00:00:00`);
-  d.setDate(d.getDate() + days);
-  return dayKeyOf(d);
-}
+const reminderStatuses = ['pending', 'done', 'dismissed'] as const;
 
-function gapDays(fromKey: string, toKey: string): number {
-  return Math.round(
-    (new Date(`${toKey}T00:00:00`).getTime() -
-      new Date(`${fromKey}T00:00:00`).getTime()) /
-      86_400_000,
-  );
+// 从就诊行拼出医嘱解析输入文本（spec 20 §5.3：advice + summary）
+function adviceTextOf(row: {
+  summary: string | null;
+  metadataJson: unknown;
+}): string {
+  const parts: string[] = [];
+  if (row.metadataJson && typeof row.metadataJson === 'object') {
+    const advice = (row.metadataJson as Record<string, unknown>).advice;
+    if (typeof advice === 'string' && advice.trim()) parts.push(advice.trim());
+  }
+  if (row.summary && row.summary.trim()) parts.push(row.summary.trim());
+  return parts.join('\n');
 }
 
 export const encountersRouter = createRouter({
@@ -66,187 +65,42 @@ export const encountersRouter = createRouter({
   getById: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const [encounter] = await ctx.db
-        .select()
-        .from(encounters)
-        .where(and(eq(encounters.id, input.id), eq(encounters.userId, ctx.userId)))
-        .limit(1);
-
-      if (!encounter) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Encounter not found' });
-      }
-
-      return encounter;
+      const profileId = await getActiveProfileId(ctx.userId);
+      return loadEncounter(ctx.db, ctx.userId, profileId, input.id);
     }),
 
-  // 就诊枢纽卡（spec 20 §2）：一次查询聚合就诊日 D 的三段挂载——
-  // ① 检验批次：observedAt 落在 [D-7, D+7] 的观测按日分组（口径与趋势对比页一致）；
-  // ② 当时在用药：起止区间覆盖就诊日（起止未填视为长期在用，前端标「起止未填」）；
-  // ③ 相关病史：就诊时点处于「患病中」（active 且就诊前起病，或已愈但就诊时尚未愈）。
+  // 就诊枢纽卡（spec 20 §2）：±7 天检验批次 + 时点用药 + 时点病史。
+  // 计算在 server/data/encounter-hub.ts（与 ai.encounterSummary 共用同一口径）。
   hub: protectedProcedure
     .input(z.object({ encounterId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const profileId = await getActiveProfileId(ctx.userId);
-
-      const [encounter] = await ctx.db
-        .select()
-        .from(encounters)
-        .where(
-          and(
-            eq(encounters.id, input.encounterId),
-            eq(encounters.userId, ctx.userId),
-            ...(profileId ? [eq(encounters.profileId, profileId)] : []),
-          ),
-        )
-        .limit(1);
-
-      if (!encounter) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Encounter not found' });
-      }
-
-      const D = encounter.encounterDate;
-      const winStartKey = addDaysKey(D, -7);
-      const winEndKey = addDaysKey(D, 7);
-
-      const [rows, conversions] = await Promise.all([
-        fetchBatchRows(ctx.db, ctx.userId, profileId),
-        fetchConversions(ctx.db),
-      ]);
-
-      const days = groupRowsByDay(rows);
-      const batchKeys = Array.from(days.keys())
-        .filter((k) => k >= winStartKey && k <= winEndKey)
-        .sort();
-
-      const batches = batchKeys.map((k) => {
-        const metrics = compareTwoDays(days.get(k)!, null, conversions, null);
-        return {
-          date: k,
-          total: metrics.length,
-          abnormal: metrics.filter((m) => m.isAbnormal === true).length,
-          metrics,
-        };
-      });
-
-      const medsAtVisit = await ctx.db
-        .select({
-          id: medications.id,
-          name: medications.name,
-          dosage: medications.dosage,
-          frequency: medications.frequency,
-          startDate: medications.startDate,
-          endDate: medications.endDate,
-        })
-        .from(medications)
-        .where(
-          and(
-            eq(medications.userId, ctx.userId),
-            ...(profileId ? [eq(medications.profileId, profileId)] : []),
-            or(isNull(medications.startDate), lte(medications.startDate, D)),
-            or(isNull(medications.endDate), gte(medications.endDate, D)),
-          ),
-        )
-        .orderBy(medications.name);
-
-      const conditionsAtVisit = await ctx.db
-        .select({
-          id: conditions.id,
-          name: conditions.name,
-          status: conditions.status,
-          onsetDate: conditions.onsetDate,
-        })
-        .from(conditions)
-        .where(
-          and(
-            eq(conditions.userId, ctx.userId),
-            ...(profileId ? [eq(conditions.profileId, profileId)] : []),
-            or(
-              // 在患中且就诊前已起病（起病未填视为长期在患）
-              and(
-                eq(conditions.status, 'active'),
-                or(isNull(conditions.onsetDate), lte(conditions.onsetDate, D)),
-              ),
-              // 已愈但就诊时点尚未痊愈
-              and(
-                lte(conditions.onsetDate, D),
-                or(
-                  isNull(conditions.resolutionDate),
-                  gte(conditions.resolutionDate, D),
-                ),
-              ),
-            ),
-          ),
-        )
-        .orderBy(conditions.name);
-
-      return {
-        encounterDate: D,
-        windowStart: winStartKey,
-        windowEnd: winEndKey,
-        batches,
-        medsAtVisit,
-        conditionsAtVisit,
-      };
+      const encounter = await loadEncounter(
+        ctx.db,
+        ctx.userId,
+        profileId,
+        input.encounterId,
+      );
+      return buildEncounterHub(ctx.db, ctx.userId, profileId, encounter);
     }),
 
-  // 就诊前后疗效对比（spec 20 §3，2026-10-13 拍板：不限窗口取最近）：
-  // before = 观测日期 ≤ D 的最近批次；after = > D 的最近批次。
-  // 对齐口径与趋势对比页同一来源（batch-compare.ts），after 视角 presence/delta。
+  // 就诊前后疗效对比（spec 20 §3，2026-10-13 拍板：不限窗口取最近）。
   comparison: protectedProcedure
     .input(z.object({ encounterId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const profileId = await getActiveProfileId(ctx.userId);
-
-      const [encounter] = await ctx.db
-        .select()
-        .from(encounters)
-        .where(
-          and(
-            eq(encounters.id, input.encounterId),
-            eq(encounters.userId, ctx.userId),
-            ...(profileId ? [eq(encounters.profileId, profileId)] : []),
-          ),
-        )
-        .limit(1);
-
-      if (!encounter) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Encounter not found' });
-      }
-
-      const D = encounter.encounterDate;
-
-      const [rows, conversions] = await Promise.all([
-        fetchBatchRows(ctx.db, ctx.userId, profileId),
-        fetchConversions(ctx.db),
-      ]);
-
-      const days = groupRowsByDay(rows);
-      const keys = Array.from(days.keys()).sort();
-
-      const beforeKey = keys.findLast((k) => k <= D) ?? null;
-      const afterKey = keys.find((k) => k > D) ?? null;
-
-      const before = beforeKey
-        ? { date: beforeKey, gapDays: gapDays(beforeKey, D) }
-        : null;
-      const after = afterKey ? { date: afterKey, gapDays: gapDays(D, afterKey) } : null;
-      const daysBetween =
-        beforeKey && afterKey ? gapDays(beforeKey, afterKey) : null;
-
-      let metrics: BatchMetricRow[] = [];
-      if (beforeKey && afterKey) {
-        metrics = compareTwoDays(
-          days.get(afterKey)!,
-          days.get(beforeKey)!,
-          conversions,
-          beforeKey,
-        );
-      } else if (afterKey && !beforeKey) {
-        // 就诊前无检查记录：after 即首次检查，全部视为新增
-        metrics = compareTwoDays(days.get(afterKey)!, null, conversions, null);
-      }
-
-      return { encounterDate: D, before, after, daysBetween, metrics };
+      const encounter = await loadEncounter(
+        ctx.db,
+        ctx.userId,
+        profileId,
+        input.encounterId,
+      );
+      return buildEncounterComparison(
+        ctx.db,
+        ctx.userId,
+        profileId,
+        encounter,
+      );
     }),
 
   create: protectedProcedure
@@ -274,6 +128,22 @@ export const encountersRouter = createRouter({
           summary: input.summary,
         })
         .returning();
+
+      // 医嘱复查提醒（spec 20 §5.4）：失败不阻断主流程
+      try {
+        await ensureFollowUpReminder(ctx.db, {
+          userId: ctx.userId,
+          profileId: encounter!.profileId,
+          encounterId: encounter!.id,
+          encounterDate: encounter!.encounterDate,
+          adviceText: adviceTextOf(encounter!),
+        });
+      } catch (err) {
+        console.error(
+          '[encounters] ensureFollowUpReminder failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
 
       return encounter!;
     }),
@@ -311,6 +181,22 @@ export const encountersRouter = createRouter({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Encounter not found' });
       }
 
+      // 医嘱复查提醒：更新后按新文本重解析（幂等：先删 pending 自动行再插）
+      try {
+        await ensureFollowUpReminder(ctx.db, {
+          userId: ctx.userId,
+          profileId: result[0]!.profileId,
+          encounterId: result[0]!.id,
+          encounterDate: result[0]!.encounterDate,
+          adviceText: adviceTextOf(result[0]!),
+        });
+      } catch (err) {
+        console.error(
+          '[encounters] ensureFollowUpReminder failed:',
+          err instanceof Error ? err.message : err,
+        );
+      }
+
       return result[0]!;
     }),
 
@@ -324,6 +210,136 @@ export const encountersRouter = createRouter({
 
       if (!result.length) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Encounter not found' });
+      }
+
+      return { success: true };
+    }),
+
+  // ── 医嘱复查提醒（spec 20 §5，v0.1.16 P4）─────────────────────────────────
+
+  // 单次就诊的提醒列表（枢纽卡展示，含全部状态）
+  reminders: protectedProcedure
+    .input(z.object({ encounterId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+      await loadEncounter(ctx.db, ctx.userId, profileId, input.encounterId);
+
+      return ctx.db
+        .select()
+        .from(followUpReminders)
+        .where(
+          and(
+            eq(followUpReminders.userId, ctx.userId),
+            eq(followUpReminders.encounterId, input.encounterId),
+          ),
+        )
+        .orderBy(asc(followUpReminders.dueDate));
+    }),
+
+  // 首页合并展示用：当前 profile 的全部 pending 提醒（含就诊信息）
+  upcomingReminders: protectedProcedure.query(async ({ ctx }) => {
+    const profileId = await getActiveProfileId(ctx.userId);
+    if (!profileId) return [];
+
+    return ctx.db
+      .select({
+        id: followUpReminders.id,
+        encounterId: followUpReminders.encounterId,
+        dueDate: followUpReminders.dueDate,
+        sourceText: followUpReminders.sourceText,
+        encounterDate: encounters.encounterDate,
+        encounterType: encounters.type,
+      })
+      .from(followUpReminders)
+      .innerJoin(
+        encounters,
+        eq(followUpReminders.encounterId, encounters.id),
+      )
+      .where(
+        and(
+          eq(followUpReminders.userId, ctx.userId),
+          eq(followUpReminders.profileId, profileId),
+          eq(followUpReminders.status, 'pending'),
+        ),
+      )
+      .orderBy(asc(followUpReminders.dueDate));
+  }),
+
+  setReminderStatus: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        status: z.enum(reminderStatuses),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await ctx.db
+        .update(followUpReminders)
+        .set({ status: input.status, updatedAt: new Date() })
+        .where(
+          and(
+            eq(followUpReminders.id, input.id),
+            eq(followUpReminders.userId, ctx.userId),
+          ),
+        )
+        .returning({ id: followUpReminders.id });
+
+      if (!result.length) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Reminder not found' });
+      }
+
+      return { success: true };
+    }),
+
+  // 手动补录（spec 20 §5.5）：无明确期限的医嘱由用户补录提醒；intervalDays 为空
+  createManualReminder: protectedProcedure
+    .input(
+      z.object({
+        encounterId: z.string().uuid(),
+        dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        note: z.string().max(500).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+      const encounter = await loadEncounter(
+        ctx.db,
+        ctx.userId,
+        profileId,
+        input.encounterId,
+      );
+
+      const [reminder] = await ctx.db
+        .insert(followUpReminders)
+        .values({
+          userId: ctx.userId,
+          profileId: encounter.profileId,
+          encounterId: encounter.id,
+          dueDate: input.dueDate,
+          sourceText: input.note?.trim() || null,
+          intervalDays: null,
+          status: 'pending',
+        })
+        .returning();
+
+      return reminder!;
+    }),
+
+  deleteReminder: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await ctx.db
+        .delete(followUpReminders)
+        .where(
+          and(
+            eq(followUpReminders.id, input.id),
+            eq(followUpReminders.userId, ctx.userId),
+          ),
+        )
+        .returning({ id: followUpReminders.id });
+
+      if (!result.length) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Reminder not found' });
       }
 
       return { success: true };

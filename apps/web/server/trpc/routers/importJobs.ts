@@ -23,6 +23,7 @@ import {
   type Database,
 } from "@openvitals/database";
 import { getActiveProfileId } from "../active-profile";
+import { ensureFollowUpReminder } from "../../data/follow-up";
 
 type WorkerTriggerParams = {
   importJobId: string;
@@ -397,13 +398,27 @@ export const importJobsRouter = createRouter({
             ...(updatedCandidate.physicalExam ? { physicalExam: updatedCandidate.physicalExam } : {}),
             ...(updatedCandidate.advice ? { advice: updatedCandidate.advice } : {}),
           };
-          await ctx.db.insert(encounters).values({
+          const [insertedEncounter] = await ctx.db.insert(encounters).values({
             userId: ctx.userId, profileId, type: updatedCandidate.type, encounterDate: updatedCandidate.encounterDate,
             provider: updatedCandidate.provider, facility: updatedCandidate.facility, chiefComplaint: updatedCandidate.chiefComplaint,
             summary: updatedCandidate.summary,
             ...(Object.keys(structuredMeta).length ? { metadataJson: structuredMeta } : {}),
             sourceArtifactId: job.sourceArtifactId, importJobId: job.id,
-          });
+          }).returning({ id: encounters.id });
+          try {
+            const adviceText = [updatedCandidate.advice, updatedCandidate.summary].filter(Boolean).join("\n");
+            if (adviceText.trim()) {
+              await ensureFollowUpReminder(ctx.db, {
+                userId: ctx.userId,
+                profileId,
+                encounterId: insertedEncounter.id,
+                encounterDate: updatedCandidate.encounterDate,
+                adviceText,
+              });
+            }
+          } catch (error) {
+            console.error("[follow-up] import candidate confirm reminder failed:", error);
+          }
         }
       }
 

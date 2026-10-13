@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
 import { and, eq, desc, inArray } from 'drizzle-orm';
 import { createRouter, protectedProcedure } from '../init';
 import { listObservations, users, insights, medications, conditions, encounters, aiChannels, observations, metricDefinitions, profiles } from '@openvitals/database';
@@ -6,6 +7,8 @@ import { healthChatPrompt, healthReportZhPrompt, formatObservationForContext, bu
 import type { ContextBundle } from '@openvitals/ai';
 import { generateText } from 'ai';
 import { getActiveProfileId } from '../active-profile';
+import { encounterSummaryZhPrompt } from '@openvitals/ai/prompts/encounter-summary-zh';
+import { loadEncounter, buildEncounterHub, buildEncounterComparison } from '../../data/encounter-hub';
 
 export const aiRouter = createRouter({
   chat: protectedProcedure
@@ -302,6 +305,165 @@ export const aiRouter = createRouter({
       return rows.find((row) => {
         const metadata = row.metadataJson as Record<string, unknown> | null;
         return metadata?.profileId === profileId;
+      }) ?? null;
+    }),
+
+  // P3 AI 就诊摘要（spec 20 §4）：单次就诊摘要，复用枢纽卡/前后对比同源数据
+  encounterSummary: protectedProcedure
+    .input(z.object({ encounterId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+
+      // 1. AI 渠道前置检查（验收断言 3：无渠道明确报错，不静默兜底）
+      const [channel] = await ctx.db
+        .select({ baseUrl: aiChannels.baseUrl, apiKey: aiChannels.apiKey, protocol: aiChannels.protocol })
+        .from(aiChannels)
+        .where(and(eq(aiChannels.userId, ctx.userId), eq(aiChannels.isActive, true)))
+        .limit(1);
+      const hasEnvChannel = Boolean(process.env.AI_BASE_URL && process.env.AI_API_KEY);
+      if (!channel && !hasEnvChannel) {
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '请先在设置中配置 AI 渠道' });
+      }
+
+      // 2. 同源数据：就诊 + 枢纽（±7 天批次/时点用药/时点病史）+ 前后对比
+      const encounter = await loadEncounter(ctx.db, ctx.userId, profileId, input.encounterId);
+      const [hub, comparison] = await Promise.all([
+        buildEncounterHub(ctx.db, ctx.userId, profileId, encounter),
+        buildEncounterComparison(ctx.db, ctx.userId, profileId, encounter),
+      ]);
+
+      // 3. 病历四节（与 encounterMetaSections 同键）
+      const meta = (encounter.metadataJson ?? {}) as Record<string, unknown>;
+      const metaSection = (key: string) =>
+        typeof meta[key] === 'string' && (meta[key] as string).trim() ? (meta[key] as string).trim() : null;
+
+      const typeLabels: Record<string, string> = {
+        checkup: '体检', specialist: '专科门诊', urgent_care: '急诊护理', emergency: '急诊',
+        telehealth: '远程医疗', lab_visit: '化验检查', imaging: '影像检查',
+        dental: '牙科', therapy: '治疗门诊', other: '其他',
+      };
+      const typeLabel = typeLabels[encounter.type] ?? encounter.type;
+
+      // 4. 组中文上下文
+      const lines: string[] = [];
+      lines.push(`就诊信息：`);
+      lines.push(`- 日期：${encounter.encounterDate}；类型：${typeLabel}${encounter.provider ? `；医生：${encounter.provider}` : ''}${encounter.facility ? `；机构：${encounter.facility}` : ''}`);
+      if (encounter.chiefComplaint) lines.push(`- 主诉：${encounter.chiefComplaint}`);
+      if (encounter.summary) lines.push(`- 就诊摘要：${encounter.summary}`);
+      const sectionLabels: Array<[string, string]> = [
+        ['presentIllness', '现病史'], ['pastHistory', '既往史'], ['physicalExam', '体格检查'], ['advice', '医嘱建议'],
+      ];
+      for (const [key, label] of sectionLabels) {
+        const v = metaSection(key);
+        if (v) lines.push(`- ${label}：${v}`);
+      }
+
+      lines.push('');
+      if (hub.batches.length > 0) {
+        lines.push(`就诊前后 7 天内的检验批次：`);
+        for (const batch of hub.batches) {
+          lines.push(`批次 ${batch.date}（共 ${batch.total} 项，异常 ${batch.abnormal} 项）：`);
+          for (const m of batch.metrics) {
+            const val = m.value != null ? String(m.value) : (m.valueText ?? '?');
+            const range = m.referenceRangeLow != null && m.referenceRangeHigh != null
+              ? `，参考区间 ${m.referenceRangeLow}-${m.referenceRangeHigh}` : '';
+            const flag = m.isAbnormal === true
+              ? `，[${(m.value != null && m.referenceRangeHigh != null && m.value > m.referenceRangeHigh) || (m.valueText && /高|↑/.test(m.valueText)) ? '偏高' : '异常'}]`
+              : m.isAbnormal === false ? '' : '';
+            lines.push(`- ${m.metricName}：${val}${m.unit ? ` ${m.unit}` : ''}（${batch.date}）${range}${flag}`);
+          }
+        }
+      } else {
+        lines.push(`就诊前后 7 天内的检验批次：无近期检验数据`);
+      }
+
+      lines.push('');
+      if (hub.medsAtVisit.length > 0) {
+        lines.push(`就诊时点在用药：`);
+        for (const m of hub.medsAtVisit) {
+          lines.push(`- ${m.name}${m.dosage ? ` ${m.dosage}` : ''}${m.frequency ? `（${m.frequency}）` : ''}${m.startDate ? `，起始 ${m.startDate}` : ''}`);
+        }
+      } else {
+        lines.push(`就诊时点在用药：无记录`);
+      }
+
+      lines.push('');
+      if (hub.conditionsAtVisit.length > 0) {
+        lines.push(`就诊时点患病中的病史：`);
+        for (const c of hub.conditionsAtVisit) {
+          lines.push(`- ${c.name}${c.onsetDate ? `（起病 ${c.onsetDate}）` : ''}`);
+        }
+      } else {
+        lines.push(`就诊时点患病中的病史：无记录`);
+      }
+
+      lines.push('');
+      const before = comparison.before;
+      const after = comparison.after;
+      if (before && after) {
+        lines.push(`上次就诊前后检验对比：上次批次 ${before.date}（距就诊 ${before.gapDays} 天）→ 后续批次 ${after.date}（就诊后 ${after.gapDays} 天）：`);
+        for (const m of comparison.metrics) {
+          if (m.presence !== 'both' || m.unitIncomparable) continue;
+          const prev = m.prevValue ?? m.prevValueText ?? '?';
+          const curr = m.value ?? m.valueText ?? '?';
+          const dir = m.direction === 'up' ? '↑' : m.direction === 'down' ? '↓' : '→';
+          lines.push(`- ${m.metricName}：${prev} → ${curr}${m.unit ? ` ${m.unit}` : ''}（${dir}${m.deltaPercent != null ? ` ${m.deltaPercent.toFixed(1)}%` : ''}）`);
+        }
+      } else if (before && !after) {
+        lines.push(`上次就诊前后检验对比：上次批次 ${before.date}（距就诊 ${before.gapDays} 天），暂无就诊后检验批次`);
+      } else if (!before && after) {
+        lines.push(`上次就诊前后检验对比：本次为记录范围内首次就诊，就诊后批次 ${after.date} 为首次检验`);
+      } else {
+        lines.push(`上次就诊前后检验对比：本次为记录范围内首次就诊，且暂无后续检验批次`);
+      }
+
+      const userPrompt = lines.join('\n');
+
+      // 5. 生成（同 healthReport 的 resolveModel 模式）
+      const [user] = await ctx.db
+        .select({ aiModel: users.aiModel })
+        .from(users)
+        .where(eq(users.id, ctx.userId))
+        .limit(1);
+      const modelId = user?.aiModel ?? process.env.AI_DEFAULT_MODEL ?? 'claude-sonnet-4-20250514';
+
+      const { text } = await generateText({
+        model: resolveModel(modelId, channel
+          ? { baseUrl: channel.baseUrl, apiKey: channel.apiKey, protocol: channel.protocol }
+          : undefined),
+        system: encounterSummaryZhPrompt,
+        prompt: userPrompt,
+      });
+
+      // 6. 存 insights（type 'encounter_summary'，重复生成保留历史）
+      const [insight] = await ctx.db
+        .insert(insights)
+        .values({
+          userId: ctx.userId,
+          type: 'encounter_summary',
+          content: text,
+          generatedBy: modelId,
+          contextTokenCount: estimateTokens(userPrompt),
+          metadataJson: { encounterId: input.encounterId, profileId, question: '就诊摘要' },
+        })
+        .returning();
+
+      return { id: insight!.id, content: text, model: modelId, createdAt: insight!.createdAt };
+    }),
+
+  latestEncounterSummary: protectedProcedure
+    .input(z.object({ encounterId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const profileId = await getActiveProfileId(ctx.userId);
+      const rows = await ctx.db
+        .select()
+        .from(insights)
+        .where(and(eq(insights.userId, ctx.userId), eq(insights.type, 'encounter_summary')))
+        .orderBy(desc(insights.createdAt))
+        .limit(100);
+      return rows.find((row) => {
+        const metadata = row.metadataJson as Record<string, unknown> | null;
+        return metadata?.profileId === profileId && metadata?.encounterId === input.encounterId;
       }) ?? null;
     }),
 });

@@ -35,6 +35,8 @@ export default function HomePage() {
   });
   const conditionsQuery = trpc.conditions.list.useQuery();
   const healthReport = trpc.ai.latestHealthReport.useQuery();
+  // 医嘱来源复查提醒（spec 20 §5，v0.1.16 P4）：与按指标周期推算的复查合并展示
+  const followUpReminders = trpc.encounters.upcomingReminders.useQuery();
 
   const isLoading = observations.isLoading || medications.isLoading || importJobs.isLoading;
 
@@ -171,8 +173,14 @@ export default function HomePage() {
   }, [stats.byMetric]);
 
   // Retest items for dashboard
+  // 就诊类型中文标签（与 encounters 页 encounterTypeConfig 口径一致）
+  const encounterTypeLabels: Record<string, string> = {
+    checkup: '体检', specialist: '专科门诊', urgent_care: '急诊护理', emergency: '急诊',
+    telehealth: '远程医疗', lab_visit: '化验检查', imaging: '影像检查',
+    dental: '牙科', therapy: '治疗门诊', other: '就诊',
+  };
   const upcomingRetests = useMemo<RetestItem[]>(() => {
-    return retestItems
+    const metricItems = retestItems
       .filter((r) => !r.isPaused)
       .map((r) => ({
         metricCode: r.metricCode,
@@ -182,7 +190,28 @@ export default function HomePage() {
         daysSinceLastTest: r.daysSinceLastTest,
         healthStatus: r.healthStatus,
       }));
-  }, [retestItems]);
+    // 医嘱来源提醒：urgency 按 dueDate 换算同档位（testing.ts 口径：
+    // <=-30 overdue / <=0 due_soon / <=30 upcoming / else on_track）
+    const todayMs = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime();
+    const adviceItems: RetestItem[] = (followUpReminders.data ?? []).map((r) => {
+      const dueMs = new Date(`${r.dueDate}T00:00:00Z`).getTime();
+      const dueInDays = Math.round((dueMs - todayMs) / 86_400_000);
+      const urgency: RetestItem['urgency'] =
+        dueInDays <= -30 ? 'overdue' : dueInDays <= 0 ? 'due_soon' : dueInDays <= 30 ? 'upcoming' : 'on_track';
+      return {
+        metricCode: `advice-${r.id}`,
+        metricName: `${encounterTypeLabels[r.encounterType] ?? '就诊'}复查`,
+        urgency,
+        dueInDays,
+        daysSinceLastTest: 0,
+        healthStatus: 'neutral',
+        source: 'advice',
+        sourceText: r.sourceText ?? undefined,
+      };
+    });
+    // 合并后按到期先后排序（逾期最多的在前），非 on_track 的可操作项由卡片自取
+    return [...metricItems, ...adviceItems].sort((a, b) => a.dueInDays - b.dueInDays);
+  }, [retestItems, followUpReminders.data]);
 
   // Health insights
   const healthInsights = useMemo(() => {

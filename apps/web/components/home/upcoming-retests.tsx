@@ -11,6 +11,10 @@ export interface RetestItem {
   dueInDays: number;
   daysSinceLastTest: number;
   healthStatus: string;
+  /** 提醒来源：metric = 按指标周期推算（默认）；advice = 医嘱解析（spec 20 §5） */
+  source?: 'metric' | 'advice';
+  /** 医嘱来源时的原文摘录（如「三个月后复查肾功能」） */
+  sourceText?: string;
 }
 
 interface UpcomingRetestsProps {
@@ -78,8 +82,10 @@ export function UpcomingRetests({ items }: UpcomingRetestsProps) {
                 <span className="text-[12px] font-medium text-neutral-700 font-body truncate block">
                   {item.metricName}
                 </span>
-                <span className="text-[10px] font-mono text-neutral-400">
-                  上次检查 {item.daysSinceLastTest} 天前
+                <span className="text-[10px] font-mono text-neutral-400 truncate block">
+                  {item.source === 'advice'
+                    ? `医嘱：${item.sourceText ?? '医嘱要求复查'}`
+                    : `上次检查 ${item.daysSinceLastTest} 天前`}
                 </span>
               </div>
               <span className={cn('text-[10px] font-mono font-bold uppercase tracking-[0.04em]', style.text)}>

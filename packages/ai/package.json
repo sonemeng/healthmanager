@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./prompts/encounter-summary-zh": "./src/prompts/encounter-summary-zh.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
