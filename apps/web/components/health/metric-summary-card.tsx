@@ -91,11 +91,11 @@ export function MetricSummaryCard({
                 className="text-[10px] font-mono"
                 style={{ color: "var(--color-health-optimal)" }}
               >
-                Suboptimal · {optimalRange}
+                欠佳 · {optimalRange}
               </span>
             )}
           <span className="text-[11px] text-neutral-400 font-mono">
-            {resultCount} result{resultCount !== 1 ? "s" : ""} · {latestDate}
+            {resultCount} 次结果 · {latestDate}
           </span>
         </div>
         <MiniSparkline

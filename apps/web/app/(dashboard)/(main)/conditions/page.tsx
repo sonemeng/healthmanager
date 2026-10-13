@@ -16,7 +16,7 @@ import {
   Calendar,
   User,
   MoreVertical,
-  Stethoscope,
+  Trash2,
   CheckCircle2,
   AlertCircle,
   Download,
@@ -30,6 +30,13 @@ const severityStatus: Record<string, HealthStatus> = {
   mild: "info",
   moderate: "warning",
   severe: "critical",
+};
+
+// severity 展示译法（沿用 timeline/derive.ts 与 reports 页既有口径）
+const severityLabel: Record<string, string> = {
+  mild: "轻度",
+  moderate: "中度",
+  severe: "重度",
 };
 
 export default function ConditionsPage() {
@@ -72,7 +79,7 @@ export default function ConditionsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-[24px] font-display font-medium tracking-[-0.03em] text-neutral-900">
-            Conditions
+            病史记录
           </h1>
           <p className="text-[13px] text-neutral-500 font-body mt-1">
             记录你的健康状况与诊断
@@ -124,7 +131,7 @@ export default function ConditionsPage() {
       {conditions?.length === 0 ? (
         <AnimatedEmptyState
           title="暂无病史记录"
-          description="Add your health conditions and diagnoses to build a complete health picture."
+          description="添加病史与诊断，逐步构建完整的健康画像。"
           cardContent={({ icon: Icon }) => (
             <>
               <div className="flex size-7 items-center justify-center card">
@@ -136,7 +143,7 @@ export default function ConditionsPage() {
           addButton={
             <Button
               icon={<Plus />}
-              text="Add condition"
+              text="添加病史"
               onClick={() => modal.show(<AddConditionModal />)}
             />
           }
@@ -149,7 +156,7 @@ export default function ConditionsPage() {
               <div className="flex items-center gap-2 mb-3">
                 <AlertCircle className="size-3.5 text-neutral-500" />
                 <h2 className="text-[13px] font-semibold font-display text-neutral-700 uppercase tracking-[0.04em]">
-                  Active
+                  在患
                 </h2>
                 <span className="bg-neutral-100 px-2 py-0.5 text-[10px] font-mono font-bold text-neutral-500 tabular-nums">
                   {active.length}
@@ -190,7 +197,7 @@ export default function ConditionsPage() {
               <div className="flex items-center gap-2 mb-3">
                 <CheckCircle2 className="size-3.5 text-neutral-400" />
                 <h2 className="text-[13px] font-semibold font-display text-neutral-500 uppercase tracking-[0.04em]">
-                  Resolved
+                  已痊愈
                 </h2>
                 <span className="bg-neutral-100 px-2 py-0.5 text-[10px] font-mono font-bold text-neutral-500 tabular-nums">
                   {resolved.length}
@@ -288,7 +295,7 @@ function ConditionCard({
               {condition.severity && (
                 <StatusBadge
                   status={severityStatus[condition.severity] ?? "neutral"}
-                  label={condition.severity}
+                  label={severityLabel[condition.severity] ?? condition.severity}
                 />
               )}
               {condition.onsetDate && (
@@ -307,9 +314,14 @@ function ConditionCard({
               )}
             </div>
             {condition.notes && (
-              <p className="text-[12px] text-neutral-500 font-body mt-2 max-w-lg">
-                {condition.notes}
-              </p>
+              <div className="mt-2.5 max-w-3xl grid grid-cols-[76px_1fr] items-baseline gap-x-3">
+                <span className="text-[12px] font-medium text-neutral-500 font-body">
+                  备注
+                </span>
+                <p className="text-[12px] text-neutral-600 font-body leading-relaxed">
+                  {condition.notes}
+                </p>
+              </div>
             )}
           </div>
         </div>
@@ -341,15 +353,15 @@ function ConditionCard({
                     className="w-full px-3 py-2 text-left text-[12px] font-body text-neutral-700 hover:bg-neutral-50 transition-colors flex items-center gap-2 cursor-pointer"
                   >
                     <AlertCircle className="size-3.5" />
-                    Reactivate
+                    恢复为在患
                   </button>
                 )}
                 <button
                   onClick={onDelete}
                   className="w-full px-3 py-2 text-left text-[12px] font-body text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2 cursor-pointer"
                 >
-                  <Stethoscope className="size-3.5" />
-                  Delete
+                  <Trash2 className="size-3.5" />
+                  删除
                 </button>
               </div>
             </>

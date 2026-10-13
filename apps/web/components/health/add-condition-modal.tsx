@@ -16,10 +16,16 @@ const inputClass =
 const labelClass = 'block text-[13px] font-medium text-neutral-700 mb-1.5 font-display';
 
 const severities = [
-  { value: 'mild', label: 'Mild' },
+  { value: 'mild', label: '轻度' },
   { value: 'moderate', label: '中度' },
-  { value: 'severe', label: 'Severe' },
+  { value: 'severe', label: '重度' },
 ] as const;
+
+// 状态展示译法（conditions 页「在患/已痊愈」同口径）
+const statusLabel: Record<'active' | 'resolved', string> = {
+  active: '在患',
+  resolved: '已痊愈',
+};
 
 type Severity = (typeof severities)[number]['value'];
 
@@ -88,12 +94,12 @@ export function AddConditionModal() {
           transition={{ delay: fieldDelay * 0 }}
         >
           <label className={labelClass}>
-            Condition <span className="text-red-400">*</span>
+            病史名称 <span className="text-red-400">*</span>
           </label>
           <input
             type="text"
             className={inputClass}
-            placeholder="e.g. Type 2 Diabetes"
+            placeholder="如：2 型糖尿病"
             value={name}
             onChange={(e) => setName(e.target.value)}
             autoFocus
@@ -105,7 +111,7 @@ export function AddConditionModal() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: fieldDelay * 1 }}
         >
-          <label className={labelClass}>Status</label>
+          <label className={labelClass}>状态</label>
           <div className="flex gap-1 border border-neutral-200 bg-neutral-50 p-1">
             {(['active', 'resolved'] as const).map((s) => (
               <button
@@ -113,13 +119,13 @@ export function AddConditionModal() {
                 type="button"
                 onClick={() => setStatus(s)}
                 className={cn(
-                  'flex-1 px-3 py-1.5 text-[13px] font-medium transition-all capitalize',
+                  'flex-1 px-3 py-1.5 text-[13px] font-medium transition-all',
                   status === s
                     ? 'bg-white text-neutral-900'
                     : 'text-neutral-500 hover:text-neutral-700',
                 )}
               >
-                {s}
+                {statusLabel[s]}
               </button>
             ))}
           </div>
@@ -130,7 +136,7 @@ export function AddConditionModal() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: fieldDelay * 2 }}
         >
-          <label className={labelClass}>Severity</label>
+          <label className={labelClass}>严重程度</label>
           <div className="flex gap-1 border border-neutral-200 bg-neutral-50 p-1">
             {severities.map((s) => (
               <button
@@ -157,7 +163,7 @@ export function AddConditionModal() {
           className="grid grid-cols-2 gap-3"
         >
           <div>
-            <label className={labelClass}>Onset date</label>
+            <label className={labelClass}>发病日期</label>
             <input
               type="date"
               className={inputClass}
@@ -167,7 +173,7 @@ export function AddConditionModal() {
           </div>
           {status === 'resolved' && (
             <div>
-              <label className={labelClass}>Resolution date</label>
+              <label className={labelClass}>痊愈日期</label>
               <input
                 type="date"
                 className={inputClass}
@@ -183,7 +189,7 @@ export function AddConditionModal() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: fieldDelay * 4 }}
         >
-          <label className={labelClass}>Diagnosed by</label>
+          <label className={labelClass}>诊断医生</label>
           <input
             type="text"
             className={inputClass}
@@ -205,11 +211,11 @@ export function AddConditionModal() {
               className="flex items-center gap-1 text-[13px] text-neutral-500 hover:text-neutral-700 transition-colors"
             >
               <ChevronDown className="h-3.5 w-3.5" />
-              Add notes
+              添加备注
             </button>
           ) : (
             <div>
-              <label className={labelClass}>Notes</label>
+              <label className={labelClass}>备注</label>
               <textarea
                 className={cn(inputClass, 'resize-none')}
                 rows={3}

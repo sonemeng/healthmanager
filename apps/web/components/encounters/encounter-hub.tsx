@@ -67,6 +67,8 @@ function CompareModal({
     <Template
       title="就诊前后对比"
       description={`对比 ${encounterDate} 就诊前后的最近两次检验结果（不限窗口取最近，已标注距就诊天数）。`}
+      // 对比表 min-w 680px，默认 max-w-md(448px) 会横向裁切，放宽到 3xl（768px−48px 内边距=720px ≥ 680px）
+      className="md:max-w-3xl"
     >
       {isLoading && (
         <div className="space-y-2">

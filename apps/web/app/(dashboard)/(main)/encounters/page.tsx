@@ -189,6 +189,7 @@ export default function EncountersPage() {
               encounterTypeConfig[encounter.type] ?? encounterTypeConfig.other;
             // 有导入来源的就诊才有「查看原始病历」入口（手动新建的无）
             const sourceJobId = encounter.importJobId;
+            const metaSections = encounterMetaSections(encounter.metadataJson);
 
             return (
               <div
@@ -196,7 +197,7 @@ export default function EncountersPage() {
                 className="px-4 py-4 bg-white border-b border-neutral-100 last:border-b-0"
               >
                 <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-3">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
                     <div
                       className={cn(
                         "flex items-center justify-center size-8 mt-0.5 shrink-0",
@@ -205,13 +206,13 @@ export default function EncountersPage() {
                     >
                       <Stethoscope className={cn("size-4", typeConfig.color)} />
                     </div>
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <h3 className="text-[14px] font-semibold text-neutral-900 font-display">
                           {typeConfig.label}
                         </h3>
                         {encounter.chiefComplaint && (
-                          <span className="text-[13px] text-neutral-600 font-body">
+                          <span className="text-[13px] text-neutral-600 font-body truncate">
                             — {encounter.chiefComplaint}
                           </span>
                         )}
@@ -234,17 +235,34 @@ export default function EncountersPage() {
                           </span>
                         )}
                       </div>
-                      {encounter.summary && (
-                        <p className="text-[12px] text-neutral-500 font-body mt-2 max-w-lg">
-                          {encounter.summary}
-                        </p>
-                      )}
-                      {encounterMetaSections(encounter.metadataJson).map(([label, value]) => (
-                        <div key={label} className="mt-1.5 max-w-lg text-[12px] leading-relaxed">
-                          <span className="font-medium text-neutral-700">{label}：</span>
-                          <span className="text-neutral-600">{value}</span>
+                      {/* 摘要 + 病历小节：标签左轨 + 内容流两列结构（修复文字挤左），限宽 3xl 保障长文可读 */}
+                      {(encounter.summary || metaSections.length > 0) && (
+                        <div className="mt-2.5 space-y-1.5 max-w-3xl">
+                          {encounter.summary && (
+                            <div className="grid grid-cols-[76px_1fr] items-baseline gap-x-3">
+                              <span className="text-[12px] font-medium text-neutral-500 font-body">
+                                摘要
+                              </span>
+                              <p className="text-[12px] text-neutral-600 font-body leading-relaxed">
+                                {encounter.summary}
+                              </p>
+                            </div>
+                          )}
+                          {metaSections.map(([label, value]) => (
+                            <div
+                              key={label}
+                              className="grid grid-cols-[76px_1fr] items-baseline gap-x-3"
+                            >
+                              <span className="text-[12px] font-medium text-neutral-500 font-body">
+                                {label}
+                              </span>
+                              <p className="text-[12px] text-neutral-600 font-body leading-relaxed">
+                                {value}
+                              </p>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
                   </div>
 
