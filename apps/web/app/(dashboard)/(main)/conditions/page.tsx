@@ -25,6 +25,24 @@ import { downloadCsv, downloadText } from "@/lib/export";
 import { ModuleImports } from "@/components/health/module-imports";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  ChevronDown,
+  Clock,
+  TestTubes,
+} from "lucide-react";
+
+// 病程时间线入口门槛数据形状（trpc.conditions.timelineGate）
+interface ConditionGateMetric {
+  code: string;
+  name: string;
+  obsCount: number;
+}
+
+interface ConditionGate {
+  metrics: ConditionGateMetric[];
+  totalObs: number;
+}
 
 const severityStatus: Record<string, HealthStatus> = {
   mild: "info",
@@ -41,8 +59,11 @@ const severityLabel: Record<string, string> = {
 
 export default function ConditionsPage() {
   const { data: conditions, isLoading } = trpc.conditions.list.useQuery();
+  // 病程时间线入口门槛（spec 20 §6.2 P5）：映射指标与观测次数
+  const { data: gate } = trpc.conditions.timelineGate.useQuery();
   const modal = useModal();
   const utils = trpc.useUtils();
+  const router = useRouter();
 
   const updateMutation = trpc.conditions.update.useMutation({
     onSuccess: () => utils.conditions.list.invalidate(),
@@ -53,6 +74,13 @@ export default function ConditionsPage() {
   });
 
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  // 行展开（病程入口，spec 20 §6.2）：一次只展开一行（对齐 encounters 页 expandedId 模式）
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const gateMap = new Map(
+    (gate?.gates ?? []).map((g) => [g.conditionId, g]),
+  );
+  const minObs = gate?.minObs ?? 3;
 
   const active = conditions?.filter((c) => c.status === "active") ?? [];
   const resolved = conditions?.filter((c) => c.status === "resolved") ?? [];
@@ -173,6 +201,17 @@ export default function ConditionsPage() {
                         menuOpen === condition.id ? null : condition.id,
                       )
                     }
+                    expanded={expandedId === condition.id}
+                    onToggleExpand={() =>
+                      setExpandedId(
+                        expandedId === condition.id ? null : condition.id,
+                      )
+                    }
+                    gate={gateMap.get(condition.id) ?? null}
+                    minObs={minObs}
+                    onOpenTimeline={() =>
+                      router.push(`/timeline?condition=${condition.id}`)
+                    }
                     onResolve={() => {
                       updateMutation.mutate({
                         id: condition.id,
@@ -214,6 +253,17 @@ export default function ConditionsPage() {
                         menuOpen === condition.id ? null : condition.id,
                       )
                     }
+                    expanded={expandedId === condition.id}
+                    onToggleExpand={() =>
+                      setExpandedId(
+                        expandedId === condition.id ? null : condition.id,
+                      )
+                    }
+                    gate={gateMap.get(condition.id) ?? null}
+                    minObs={minObs}
+                    onOpenTimeline={() =>
+                      router.push(`/timeline?condition=${condition.id}`)
+                    }
                     onReactivate={() => {
                       updateMutation.mutate({
                         id: condition.id,
@@ -250,6 +300,11 @@ interface ConditionCardProps {
   };
   menuOpen: boolean;
   onMenuToggle: () => void;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  gate: ConditionGate | null;
+  minObs: number;
+  onOpenTimeline: () => void;
   onResolve?: () => void;
   onReactivate?: () => void;
   onDelete: () => void;
@@ -259,6 +314,11 @@ function ConditionCard({
   condition,
   menuOpen,
   onMenuToggle,
+  expanded,
+  onToggleExpand,
+  gate,
+  minObs,
+  onOpenTimeline,
   onResolve,
   onReactivate,
   onDelete,
@@ -326,8 +386,22 @@ function ConditionCard({
           </div>
         </div>
 
-        {/* Action menu */}
-        <div className="relative">
+        {/* 展开病程入口（spec 20 §6.2）+ 操作菜单 */}
+        <div className="flex items-start gap-1">
+          <button
+            onClick={onToggleExpand}
+            className="p-1.5 text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 transition-colors cursor-pointer"
+            title={expanded ? "收起" : "展开病程详情"}
+          >
+            <ChevronDown
+              className={cn(
+                "size-4 transition-transform",
+                expanded && "rotate-180",
+              )}
+            />
+          </button>
+          {/* Action menu */}
+          <div className="relative">
           <button
             onClick={onMenuToggle}
             className="p-1.5 text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 transition-colors cursor-pointer"
@@ -366,8 +440,66 @@ function ConditionCard({
               </div>
             </>
           )}
+          </div>
         </div>
       </div>
+
+      {/* 病程入口展开区（spec 20 §6.2 P5）：关注指标 + 病程时间线按钮/积累提示 */}
+      {expanded && (
+        <div className="mt-3 border-t border-neutral-100 pt-3 pl-11">
+          {!gate ? (
+            <div className="h-3 w-40 animate-pulse bg-neutral-100" />
+          ) : gate.metrics.length === 0 ? (
+            <p className="text-[12px] text-neutral-400 font-body">
+              该病史暂未配置关注指标映射（如高血压：检验单通常不含血压项），病程时间线暂不开放。
+            </p>
+          ) : (
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-2">
+                <TestTubes className="size-3.5 text-neutral-400" />
+                <h4 className="text-[12px] font-semibold font-display text-neutral-600">
+                  关注指标
+                </h4>
+                <span className="bg-neutral-100 px-2 py-0.5 text-[10px] font-mono font-bold text-neutral-500 tabular-nums">
+                  {gate.metrics.length}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {gate.metrics.map((m) => (
+                  <span
+                    key={m.code}
+                    className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-[12px] text-neutral-700 font-body"
+                  >
+                    {m.name}
+                    <span
+                      className={cn(
+                        "ml-1.5 text-[10px] font-mono",
+                        m.obsCount > 0 ? "text-neutral-400" : "text-neutral-300",
+                      )}
+                    >
+                      {m.obsCount > 0 ? `${m.obsCount} 次` : "待检测"}
+                    </span>
+                  </span>
+                ))}
+              </div>
+              {gate.totalObs >= minObs ? (
+                <button
+                  onClick={onOpenTimeline}
+                  className="inline-flex items-center gap-1.5 border border-neutral-200 bg-white px-3 py-1.5 text-[12px] font-body text-neutral-700 hover:bg-neutral-50 transition-colors cursor-pointer"
+                >
+                  <Clock className="size-3.5 text-neutral-400" />
+                  病程时间线
+                </button>
+              ) : (
+                <p className="text-[12px] text-neutral-400 font-body">
+                  数据积累中（该病史关注指标已有 {gate.totalObs} 次观测，
+                  满 {minObs} 次后开放病程时间线，还需 {minObs - gate.totalObs} 次）。
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

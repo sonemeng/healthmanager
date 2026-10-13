@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc/client";
 import { TitleActionHeader } from "@/components/title-action-header";
 import { StatusBadge } from "@/components/health/status-badge";
@@ -40,11 +41,17 @@ import {
   type MetricSeries,
   type RawObs,
 } from "@/components/timeline/derive";
+import {
+  metricsForCondition,
+  CONDITION_TIMELINE_MIN_OBS,
+} from "@openvitals/database/condition-metric-map";
 
 // ---------------------------------------------------------------------------
 // 时间线 C（spec 18 §1/§2，0.1.13）：LifeLines 泳道式时间线
 // 泳道（就诊/用药/病史/检查）+ 关注指标曲线（共用时间轴）+ 分面小图矩阵
 // 原「按月列表」降级为页内「列表」视图，信息不丢。
+// 病程模式（spec 20 §6.2 P5，0.1.17）：/timeline?condition={id} ——
+// 检验泳道只渲染该病史的映射指标，就诊/病史点与用药泳道保留，头部加「该病史关注指标」聚合。
 // ---------------------------------------------------------------------------
 
 const emptyIcons = [Clock, TestTubes, Pill, HeartPulse, Stethoscope];
@@ -64,7 +71,31 @@ const LIST_ICON_COLORS: Record<string, string> = {
 };
 
 export default function TimelinePage() {
+  // useSearchParams 需要 Suspense 边界（Next App Router 构建要求，compare 页同款）
+  return (
+    <Suspense
+      fallback={
+        <div>
+          <TitleActionHeader title="时间线" subtitle="加载中…" />
+          <div className="mt-7 space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="card h-24 animate-pulse bg-neutral-50" />
+            ))}
+          </div>
+        </div>
+      }
+    >
+      <TimelinePageInner />
+    </Suspense>
+  );
+}
+
+function TimelinePageInner() {
   const modal = useModal();
+  const searchParams = useSearchParams();
+  // 病程模式（spec 20 §6.2）：/timeline?condition={id}
+  const conditionId = searchParams.get("condition");
+  const condMode = conditionId != null;
 
   const observations = trpc.observations.list.useQuery({ limit: 200 });
   const medications = trpc.medications.list.useQuery({});
@@ -99,9 +130,37 @@ export default function TimelinePage() {
     [observations.data],
   );
 
+  /* --------------------------- 病程模式派生（spec 20 §6.2） --------------------------- */
+
+  const condition = condMode
+    ? (conditions.data ?? []).find((c) => c.id === conditionId)
+    : undefined;
+  const mappedCodes = useMemo(
+    () => (condition ? metricsForCondition(condition.name) : []),
+    [condition],
+  );
+  const mappedSet = useMemo(() => new Set<string>(mappedCodes), [mappedCodes]);
+  // 病程模式下检验数据只保留映射指标；普通模式不受影响
+  const scopedObs = useMemo(
+    () => (condMode ? obs.filter((r) => mappedSet.has(r.metricCode)) : obs),
+    [obs, mappedSet, condMode],
+  );
+  const mappedMetrics = useMemo(() => {
+    if (!condition) return [];
+    const counts = new Map<string, number>();
+    for (const r of scopedObs) {
+      counts.set(r.metricCode, (counts.get(r.metricCode) ?? 0) + 1);
+    }
+    return mappedCodes.map((code) => ({
+      code,
+      name: nameMap.get(code) ?? code,
+      obsCount: counts.get(code) ?? 0,
+    }));
+  }, [condition, mappedCodes, scopedObs, nameMap]);
+
   /* ------------------------------ 泳道数据 ------------------------------ */
 
-  const labBatches = useMemo(() => groupObservationsByDay(obs), [obs]);
+  const labBatches = useMemo(() => groupObservationsByDay(scopedObs), [scopedObs]);
   const labPoints = useMemo(
     () => deriveLabPoints(labBatches, (c) => nameMap.get(c) ?? c),
     [labBatches, nameMap],
@@ -121,26 +180,30 @@ export default function TimelinePage() {
 
   /* ---------------------------- 关注指标序列 ---------------------------- */
 
+  // 病程模式 = 该病史映射指标；普通模式 = 首页关注的已保存指标（原逻辑不变）
   const latestByCode = useMemo(() => {
     const m = new Map<string, RawObs>();
-    for (const r of obs) if (!m.has(r.metricCode)) m.set(r.metricCode, r);
+    for (const r of scopedObs) if (!m.has(r.metricCode)) m.set(r.metricCode, r);
     return m;
-  }, [obs]);
+  }, [scopedObs]);
 
   const available = useMemo(() => {
+    if (condMode) {
+      return mappedMetrics.map((m) => ({ code: m.code, name: m.name }));
+    }
     const saved = dash.data?.saved ?? [];
     return saved.map((s) => ({
       code: s.metricCode,
       name: nameMap.get(s.metricCode) ?? s.metricCode,
     }));
-  }, [dash.data, nameMap]);
+  }, [condMode, mappedMetrics, dash.data, nameMap]);
 
   const allSeries = useMemo<MetricSeries[]>(
     () =>
       available.map((a) =>
-        deriveSeries(a.code, a.name, obs, latestByCode.get(a.code)),
+        deriveSeries(a.code, a.name, scopedObs, latestByCode.get(a.code)),
       ),
-    [available, obs, latestByCode],
+    [available, scopedObs, latestByCode],
   );
 
   const activeCodes = selected ?? available.slice(0, 2).map((a) => a.code);
@@ -230,6 +293,64 @@ export default function TimelinePage() {
     );
   }
 
+  // 病程模式门槛（spec 20 §6.2）：直接访问 URL 也拦，与 conditions 页入口同规则
+  if (condMode) {
+    if (!condition) {
+      return (
+        <div>
+          <TitleActionHeader title="病程时间线" subtitle="未找到该病史记录" />
+          <div className="mt-7">
+            <AnimatedEmptyState
+              title="未找到该病史记录"
+              description="该病史可能已被删除、或属于其他成员档案。可回到病史记录页查看当前档案的病史。"
+              cardIcon={({ index }) => emptyIcons[index % emptyIcons.length]!}
+              learnMoreHref="/conditions"
+              learnMoreClassName="border-accent-200 text-accent-600 hover:bg-accent-50"
+            />
+          </div>
+        </div>
+      );
+    }
+    if (mappedCodes.length === 0) {
+      return (
+        <div>
+          <TitleActionHeader
+            title="病程时间线"
+            subtitle={`${condition.name} · 暂未配置关注指标映射`}
+          />
+          <div className="mt-7">
+            <AnimatedEmptyState
+              title="该病史暂未配置关注指标映射"
+              description="病程时间线按病史-指标映射字典渲染关注指标。该病史暂无映射（如高血压：检验单通常不含血压项，不硬造映射）。"
+              cardIcon={({ index }) => emptyIcons[index % emptyIcons.length]!}
+              learnMoreHref="/conditions"
+              learnMoreClassName="border-accent-200 text-accent-600 hover:bg-accent-50"
+            />
+          </div>
+        </div>
+      );
+    }
+    if (scopedObs.length < CONDITION_TIMELINE_MIN_OBS) {
+      return (
+        <div>
+          <TitleActionHeader
+            title="病程时间线"
+            subtitle={`${condition.name} · 数据积累中`}
+          />
+          <div className="mt-7">
+            <AnimatedEmptyState
+              title="数据积累中"
+              description={`该病史关注指标已有 ${scopedObs.length} 次观测，满 ${CONDITION_TIMELINE_MIN_OBS} 次后开放病程时间线（还需 ${CONDITION_TIMELINE_MIN_OBS - scopedObs.length} 次）。可上传更多检验报告积累数据。`}
+              cardIcon={({ index }) => emptyIcons[index % emptyIcons.length]!}
+              learnMoreHref="/uploads"
+              learnMoreClassName="border-accent-200 text-accent-600 hover:bg-accent-50"
+            />
+          </div>
+        </div>
+      );
+    }
+  }
+
   if (listEvents.length === 0) {
     return (
       <div>
@@ -253,8 +374,12 @@ export default function TimelinePage() {
   return (
     <div>
       <TitleActionHeader
-        title="时间线"
-        subtitle={`共 ${listEvents.length} 条记录 · ${labPoints.length} 次检查`}
+        title={condMode ? "病程时间线" : "时间线"}
+        subtitle={
+          condMode && condition
+            ? `${condition.name} · 关注指标 ${mappedMetrics.length} 项 · 已积累 ${scopedObs.length} 次观测`
+            : `共 ${listEvents.length} 条记录 · ${labPoints.length} 次检查`
+        }
         actions={
           <PillTabs
             items={[
@@ -269,6 +394,39 @@ export default function TimelinePage() {
 
       {view === "lanes" ? (
         <div className="mt-6 space-y-4">
+          {/* 该病史关注指标聚合头（spec 20 §6.2 P5） */}
+          {condMode && condition && (
+            <div className="card px-4 py-3">
+              <div className="flex items-center gap-2 mb-2">
+                <HeartPulse className="size-3.5 text-neutral-400" />
+                <h2 className="text-[13px] font-semibold font-display text-neutral-700">
+                  该病史关注指标
+                </h2>
+                <span className="bg-neutral-100 px-2 py-0.5 text-[10px] font-mono font-bold text-neutral-500 tabular-nums">
+                  {mappedMetrics.length}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {mappedMetrics.map((m) => (
+                  <span
+                    key={m.code}
+                    className="inline-flex items-center rounded-full border border-neutral-200 bg-white px-2.5 py-1 text-[12px] text-neutral-700 font-body"
+                  >
+                    {m.name}
+                    <span
+                      className={cn(
+                        "ml-1.5 text-[10px] font-mono",
+                        m.obsCount > 0 ? "text-neutral-400" : "text-neutral-300",
+                      )}
+                    >
+                      {m.obsCount > 0 ? `${m.obsCount} 次` : "待检测"}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           <WatchCurves
             series={activeSeries}
             available={available}

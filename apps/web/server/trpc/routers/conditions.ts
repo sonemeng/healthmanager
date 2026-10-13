@@ -1,8 +1,16 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, inArray, count } from 'drizzle-orm';
 import { createRouter, protectedProcedure } from '../init';
-import { conditions } from '@openvitals/database';
+import {
+  conditions,
+  observations,
+  metricDefinitions,
+} from '@openvitals/database';
+import {
+  metricsForCondition,
+  CONDITION_TIMELINE_MIN_OBS,
+} from '@openvitals/database/condition-metric-map';
 import { getActiveProfileId } from '../active-profile';
 
 export const conditionsRouter = createRouter({
@@ -20,11 +28,73 @@ export const conditionsRouter = createRouter({
         where.push(eq(conditions.status, input.status));
       }
 
-      return ctx.db
-        .select()
+    return ctx.db
+      .select()
+      .from(conditions)
+      .where(and(...where))
+      .orderBy(desc(conditions.createdAt));
+    }),
+
+  // 病程时间线入口门槛数据（spec 20 §6.2 P5）：按映射字典聚合当前档案每条病史的
+  // 关注指标与观测次数。计数口径与时间线页 observations.list 一致（不筛 status、
+  // 含全部行）；合计 ≥ CONDITION_TIMELINE_MIN_OBS 条才放开「病程时间线」入口。
+  timelineGate: protectedProcedure
+    .query(async ({ ctx }) => {
+      const pid = await getActiveProfileId(ctx.userId);
+
+      const condWhere = [eq(conditions.userId, ctx.userId)];
+      if (pid) condWhere.push(eq(conditions.profileId, pid));
+      const conds = await ctx.db
+        .select({ id: conditions.id, name: conditions.name })
         .from(conditions)
-        .where(and(...where))
-        .orderBy(desc(conditions.createdAt));
+        .where(and(...condWhere));
+
+      // 全部病史映射指标的并集
+      const codeSet = new Set<string>();
+      for (const c of conds) {
+        for (const code of metricsForCondition(c.name)) codeSet.add(code);
+      }
+      const codes = Array.from(codeSet);
+      if (codes.length === 0) {
+        return { gates: [], minObs: CONDITION_TIMELINE_MIN_OBS };
+      }
+
+      const obsWhere = [
+        eq(observations.userId, ctx.userId),
+        inArray(observations.metricCode, codes),
+      ];
+      if (pid) obsWhere.push(eq(observations.profileId, pid));
+      const countRows = await ctx.db
+        .select({ metricCode: observations.metricCode, n: count() })
+        .from(observations)
+        .where(and(...obsWhere))
+        .groupBy(observations.metricCode);
+
+      const defRows = await ctx.db
+        .select({ id: metricDefinitions.id, name: metricDefinitions.name })
+        .from(metricDefinitions)
+        .where(inArray(metricDefinitions.id, codes));
+
+      const countMap = new Map(
+        countRows.map((r) => [r.metricCode, Number(r.n)]),
+      );
+      const nameMap = new Map(defRows.map((d) => [d.id, d.name]));
+
+      return {
+        minObs: CONDITION_TIMELINE_MIN_OBS,
+        gates: conds.map((c) => {
+          const metrics = metricsForCondition(c.name).map((code) => ({
+            code,
+            name: nameMap.get(code) ?? code,
+            obsCount: countMap.get(code) ?? 0,
+          }));
+          return {
+            conditionId: c.id,
+            metrics,
+            totalObs: metrics.reduce((sum, m) => sum + m.obsCount, 0),
+          };
+        }),
+      };
     }),
 
   getById: protectedProcedure
