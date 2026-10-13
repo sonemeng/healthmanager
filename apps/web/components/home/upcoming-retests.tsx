@@ -59,7 +59,7 @@ export function UpcomingRetests({ items }: UpcomingRetestsProps) {
           href="/testing"
           className="text-[11px] font-mono text-neutral-400 hover:text-neutral-600 transition-colors flex items-center gap-1"
         >
-          Plan
+          复查计划
           <ChevronRight className="size-3" />
         </Link>
       </div>
@@ -68,8 +68,8 @@ export function UpcomingRetests({ items }: UpcomingRetestsProps) {
           const style = urgencyStyles[item.urgency] ?? urgencyStyles.on_track;
           const dueText =
             item.dueInDays <= 0
-              ? `${Math.abs(item.dueInDays)}d overdue`
-              : `in ${item.dueInDays}d`;
+              ? `已逾期 ${Math.abs(item.dueInDays)} 天`
+              : `${item.dueInDays} 天后`;
 
           return (
             <div key={item.metricCode} className="flex items-center px-4 py-3">
@@ -79,7 +79,7 @@ export function UpcomingRetests({ items }: UpcomingRetestsProps) {
                   {item.metricName}
                 </span>
                 <span className="text-[10px] font-mono text-neutral-400">
-                  Last tested {item.daysSinceLastTest}d ago
+                  上次检查 {item.daysSinceLastTest} 天前
                 </span>
               </div>
               <span className={cn('text-[10px] font-mono font-bold uppercase tracking-[0.04em]', style.text)}>

@@ -21,10 +21,12 @@ import {
   Clock,
   Download,
   FileText,
+  ChevronDown,
   type LucideIcon,
 } from "lucide-react";
 import { downloadCsv, downloadText } from "@/lib/export";
 import { ModuleImports } from "@/components/health/module-imports";
+import { EncounterHub } from "@/components/encounters/encounter-hub";
 
 // 从 metadata_json 提取病历结构化小节（现病史/既往史/体格检查/医嘱建议），旧数据无则返回空
 function encounterMetaSections(metadataJson: unknown): Array<[string, string]> {
@@ -95,6 +97,8 @@ export default function EncountersPage() {
   });
 
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  // 就诊枢纽卡展开（spec 20 §2）：一次只展开一行（对齐 menuOpen 单值模式）
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -118,10 +122,10 @@ export default function EncountersPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-[24px] font-display font-medium tracking-[-0.03em] text-neutral-900">
-            Encounters
+            就诊记录
           </h1>
           <p className="text-[13px] text-neutral-500 font-body mt-1">
-            Track your healthcare visits and appointments
+            记录就医、复诊与随访；展开行可看当次检验、用药与病史（spec 20 枢纽卡）
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -161,7 +165,7 @@ export default function EncountersPage() {
       {encounters?.length === 0 ? (
         <AnimatedEmptyState
           title="暂无就诊记录"
-          description="Keep a record of your doctor visits, specialist appointments, and healthcare encounters."
+          description="记录门诊、专科与体检就诊，逐步构建完整的健康档案。"
           cardContent={({ icon: Icon }) => (
             <>
               <div className="flex size-7 items-center justify-center card">
@@ -244,6 +248,24 @@ export default function EncountersPage() {
                     </div>
                   </div>
 
+                  {/* 展开枢纽卡（spec 20 §2）+ 操作菜单 */}
+                  <div className="flex items-start gap-1">
+                  <button
+                    onClick={() =>
+                      setExpandedId(
+                        expandedId === encounter.id ? null : encounter.id,
+                      )
+                    }
+                    className="p-1.5 text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 transition-colors cursor-pointer"
+                    title={expandedId === encounter.id ? "收起" : "展开枢纽卡"}
+                  >
+                    <ChevronDown
+                      className={cn(
+                        "size-4 transition-transform",
+                        expandedId === encounter.id && "rotate-180",
+                      )}
+                    />
+                  </button>
                   {/* Action menu */}
                   <div className="relative">
                     <button
@@ -293,13 +315,21 @@ export default function EncountersPage() {
                             className="w-full px-3 py-2 text-left text-[12px] font-body text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2 cursor-pointer"
                           >
                             <Trash2 className="size-3.5" />
-                            Delete
+                            删除
                           </button>
                         </div>
                       </>
                     )}
                   </div>
+                  </div>
                 </div>
+                {/* 就诊枢纽卡（spec 20 §2）：±7 天检验批次 / 当时在用药 / 相关病史 */}
+                {expandedId === encounter.id && (
+                  <EncounterHub
+                    encounterId={encounter.id}
+                    encounterDate={encounter.encounterDate}
+                  />
+                )}
               </div>
             );
           })}

@@ -61,17 +61,17 @@ const urgencyStyles: Record<Urgency, { text: string; bar: string }> = {
 };
 
 function formatDueText(dueInDays: number): string {
-  if (dueInDays <= -1) return `${Math.abs(dueInDays)} days overdue`;
-  if (dueInDays === 0) return "Due now";
-  return `Due in ${dueInDays} days`;
+  if (dueInDays <= -1) return `已逾期 ${Math.abs(dueInDays)} 天`;
+  if (dueInDays === 0) return "今天复查";
+  return `${dueInDays} 天后复查`;
 }
 
 function formatDaysAgo(days: number): string {
-  if (days === 0) return "Today";
-  if (days === 1) return "1 day ago";
-  if (days < 30) return `${days} days ago`;
-  if (days < 365) return `${Math.floor(days / 30)} mo ago`;
-  return `${(days / 365).toFixed(1)} yr ago`;
+  if (days === 0) return "今天";
+  if (days === 1) return "1 天前";
+  if (days < 30) return `${days} 天前`;
+  if (days < 365) return `${Math.floor(days / 30)} 个月前`;
+  return `${(days / 365).toFixed(1)} 年前`;
 }
 
 export function RetestItem({
@@ -129,7 +129,7 @@ export function RetestItem({
           <StatusBadge status={item.healthStatus} label={item.healthStatus} />
           {item.optimalStatus === "suboptimal" && (
             <span className="inline-flex items-center rounded-full bg-[var(--color-health-optimal-bg)] border border-[var(--color-health-optimal-border)] px-2 py-[3px] text-xs font-medium text-[var(--color-health-optimal)]">
-              Suboptimal
+              欠佳
             </span>
           )}
 
@@ -150,7 +150,7 @@ export function RetestItem({
                   className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50"
                 >
                   <Settings2 className="h-3.5 w-3.5" />
-                  Customize interval
+                  自定义复查间隔
                 </button>
                 <button
                   onClick={() => {
@@ -164,7 +164,7 @@ export function RetestItem({
                   ) : (
                     <Pause className="h-3.5 w-3.5" />
                   )}
-                  {item.isPaused ? "Resume" : "Pause"}
+                  {item.isPaused ? "恢复提醒" : "暂停提醒"}
                 </button>
                 <Link
                   href={`/labs/${item.metricCode}`}
@@ -172,7 +172,7 @@ export function RetestItem({
                   className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50"
                 >
                   <TrendingUp className="h-3.5 w-3.5" />
-                  View trend
+                  查看趋势
                 </Link>
               </div>
             )}
@@ -189,7 +189,7 @@ export function RetestItem({
       </div>
 
       <div className={cn("text-xs font-medium", style.text)}>
-        {item.isPaused ? "Paused" : formatDueText(item.dueInDays)}
+        {item.isPaused ? "已暂停提醒" : formatDueText(item.dueInDays)}
       </div>
     </div>
   );

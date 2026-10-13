@@ -13,22 +13,22 @@ const urgencyConfig: Record<
   { label: string; color: string; bg: string }
 > = {
   overdue: {
-    label: "Overdue",
+    label: "已逾期",
     color: "var(--color-testing-overdue)",
     bg: "var(--color-testing-overdue-bg)",
   },
   due_soon: {
-    label: "Due Soon",
+    label: "即将到期",
     color: "var(--color-testing-due)",
     bg: "var(--color-testing-due-bg)",
   },
   upcoming: {
-    label: "Upcoming",
+    label: "计划中",
     color: "var(--color-testing-upcoming)",
     bg: "var(--color-testing-upcoming-bg)",
   },
   on_track: {
-    label: "On Track",
+    label: "按计划",
     color: "var(--color-testing-on-track)",
     bg: "var(--color-testing-on-track-bg)",
   },
