@@ -173,7 +173,7 @@ export async function normalize(
       ageMax: r.ageMax,
       rangeLow: r.rangeLow,
       rangeHigh: r.rangeHigh,
-      // spec 19：NULL=字典基准行；非 NULL=化验单学习行（Priority-2a 单位匹配）
+      // spec 19：NULL=字典基准行；非 NULL=学习行（互认标识/检验科区间，Priority-2a 单位匹配）
       unit: r.unit ?? null,
     });
     rangesByMetric.set(r.metricCode, existing);

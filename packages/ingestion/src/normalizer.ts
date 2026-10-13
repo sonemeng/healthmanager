@@ -11,7 +11,8 @@ export interface DemographicRange {
   /**
    * spec 19（v0.1.14）：该行的单位口径。
    * NULL = 字典基准单位行（国标/通行，数值写在 metric.unit 下）；
-   * 非 NULL = 化验单学习行（数值写在该单位下，来自用户确认的报告原文）。
+   * 非 NULL = 学习行（数值写在该单位下，来自用户确认的报告原文；
+   * source 为互认标识如「陕HR」或「检验科区间」）。
    */
   unit: string | null;
 }
@@ -151,7 +152,7 @@ function findBestDemographicRange(
   ranges: DemographicRange[],
   demographics: UserDemographics
 ): DemographicRange | null {
-  // 只考虑字典基准单位行（unit NULL）；化验单学习行（unit 非 NULL）
+  // 只考虑字典基准单位行（unit NULL）；学习行（unit 非 NULL，互认标识/检验科区间）
   // 走 Priority-2a 的单位匹配通道，不参与人口学评分（spec 19 §3.3）。
   const baseRanges = ranges.filter((r) => r.unit === null);
 
@@ -195,7 +196,7 @@ export interface ResolvedRange {
 /**
  * Resolve reference range with priority:
  * 1. Per-observation range from the extraction —— 报告原文区间，**永不门禁**
- * 2a. 化验单学习行（unit=观测单位）—— 用户确认过的检验科区间，直接采用、不走门禁（spec 19）
+ * 2a. 学习行（unit=观测单位，互认标识如陕HR / 检验科区间）—— 用户确认过的检验科区间，直接采用、不走门禁（spec 19）
  * 2b. Demographic-matched range from reference_ranges table ┐
  * 3. Metric definition fallback                            ┘ 走区间对应性门禁（spec 13 §五）
  *
@@ -216,7 +217,7 @@ export function resolveReferenceRange(
     };
   }
 
-  // Priority 2a: 化验单学习行（spec 19 §3.3）——unit 与观测单位一致的学习行
+  // Priority 2a: 学习行（spec 19 §3.3）——unit 与观测单位一致的学习行
   // 直接采用、不走门禁。学习行来自用户确认过的报告原文区间（如肌酐 μmol/L 41~73），
   // 数值与单位天然同源，不存在「错配」问题；多行（不同检验科）时按区间下限
   // 稳定排序取首行，保证确定性。

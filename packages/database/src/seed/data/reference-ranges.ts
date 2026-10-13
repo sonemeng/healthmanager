@@ -9,8 +9,8 @@ export interface ReferenceRangeSeed {
   source: string;
   /**
    * spec 19（v0.1.14）：NULL = 字典基准单位行（国标/通行口径）；
-   * 非 NULL = 化验单学习行。seed 只负责新装机，学习行由运行时 confirm/correct 写入，
-   * 因此本表全部为 NULL。
+   * 非 NULL = 学习行。seed 只负责新装机，学习行由运行时 confirm/correct 写入
+   * （source 取互认标识如「陕HR」，无标识则「检验科区间」），因此本表全部为 NULL。
    */
   unit: string | null;
 }

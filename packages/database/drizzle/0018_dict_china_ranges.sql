@@ -278,14 +278,21 @@ INSERT INTO reference_ranges (metric_code, sex, age_min, age_max, range_low, ran
   ('urine_glucose',NULL,18,NULL,NULL,NULL,'阴性（干化学定性）','通行口径'),
   ('urine_protein',NULL,18,NULL,NULL,NULL,'阴性（干化学定性）','通行口径');--> statement-breakpoint
 
--- 7) 化验单区间学习回填（spec 19 §3.2-4）：confirmed/corrected 且带原文区间的观测，
---    按 (metric_code, unit, low, high) 去重，source='化验单学习'，unit=观测单位。
---    只 INSERT 不 UPDATE；无单位的观测不收（unit NULL 保留给字典基准行）。
+-- 7) 化验单区间学习回填（spec 19 §3.2-4 + 2026-10-12 用户拍板）：confirmed/corrected 且带原文区间的观测，
+--    按 (metric_code, unit, low, high) 去重，unit=观测单位；
+--    source 动态取观测行 metadata_json 的互认标识（如「陕HR」），无标识兜底「检验科区间」。
+--    DISTINCT ON 同键优先取带互认标识的观测行。只 INSERT 不 UPDATE；
+--    无单位的观测不收（unit NULL 保留给字典基准行）。
+--    存量库（旧版 0018 已插 source='化验单学习'）由 0019 修正，本步只管新装机/未跑 0018 的库。
 INSERT INTO reference_ranges (metric_code, sex, age_min, age_max, range_low, range_high, range_text, source, unit)
-SELECT DISTINCT o.metric_code, NULL, NULL::integer, NULL::integer, o.reference_range_low, o.reference_range_high, NULL, '化验单学习', o.unit
+SELECT DISTINCT ON (o.metric_code, o.unit, o.reference_range_low, o.reference_range_high)
+  o.metric_code, NULL, NULL::integer, NULL::integer, o.reference_range_low, o.reference_range_high, NULL,
+  COALESCE(NULLIF(o.metadata_json->>'interopMark', ''), '检验科区间'), o.unit
 FROM observations o
 WHERE o.status IN ('confirmed','corrected')
   AND o.unit IS NOT NULL
   AND nullif(o.unit, '') IS NOT NULL
   AND (o.reference_range_low IS NOT NULL OR o.reference_range_high IS NOT NULL)
+ORDER BY o.metric_code, o.unit, o.reference_range_low, o.reference_range_high,
+  (NULLIF(o.metadata_json->>'interopMark', '') IS NOT NULL) DESC
 ON CONFLICT DO NOTHING;

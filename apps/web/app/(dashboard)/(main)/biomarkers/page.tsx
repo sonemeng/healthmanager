@@ -42,11 +42,16 @@ function formatRange(
   return "—";
 }
 
-// 来源分组（spec 19 §3.4）：国标 → 指南/平台 → 通行口径 → 化验单学习
+// 来源分组（spec 19 §3.4 + 2026-10-12 用户拍板）：
+// 国标 → 指南/平台 → 通行口径 → 检验互认标识（如陕HR，来源列显示标识本身）→ 检验科区间
 function sourceGroup(source: string | null): { order: number; label: string } {
-  if (source === "化验单学习") return { order: 3, label: "化验单学习（你的检验科，带单位）" };
   if (source?.startsWith("WS/T")) return { order: 0, label: "国家标准" };
   if (source === "通行口径") return { order: 2, label: "通行口径" };
+  if (source === "检验科区间")
+    return { order: 4, label: "检验科区间（报告单学习）" };
+  // 各省检验结果互认标识以「HR」结尾（陕HR/晋HR/京HR…）——行来源列直接显示标识
+  if (source && /HR$/.test(source))
+    return { order: 3, label: "检验结果互认（报告单标识）" };
   return { order: 1, label: "指南/平台口径" };
 }
 

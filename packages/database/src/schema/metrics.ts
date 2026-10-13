@@ -35,7 +35,8 @@ export const metricDefinitions = pgTable("metric_definitions", {
 
 // spec 19（v0.1.14）：unit 列区分行类型——
 //   NULL  = 字典基准单位行（国标/通行口径，数值在 metric_definitions.unit 下）
-//   非 NULL = 化验单学习行（该指标的区间以这个单位为准，来自用户确认的报告原文）
+//   非 NULL = 学习行（该指标的区间以这个单位为准，来自用户确认的报告原文；
+//            source = 互认标识如「陕HR」或「检验科区间」）
 // 唯一约束扩至 unit/low/high：同一 (metric, sex, age) 的国标行与学习行、
 // 不同检验科给出不同单位区间的学习行均可并存（幂等由「先查后插」保证）。
 export const referenceRanges = pgTable(

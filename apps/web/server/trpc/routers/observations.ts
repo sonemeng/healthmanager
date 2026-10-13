@@ -17,10 +17,11 @@ import { emitEvent } from '@openvitals/events';
 import { getActiveProfileId } from '../active-profile';
 
 /**
- * 化验单区间学习入库（spec 19 §4 C2）：
- * 被确认/纠正的观测行带报告原文区间时，先查后插写入「化验单学习」行——
- * 幂等键 = (metric_code, unit, low, high, source)；无单位或无区间不收
- * （unit NULL 保留给字典基准行）。失败不阻断确认/纠正主流程（崩溃安全）。
+ * 化验单区间学习入库（spec 19 §4 C2 + 2026-10-12 用户拍板）：
+ * 被确认/纠正的观测行带报告原文区间时，先查后插写入学习行——
+ * source 优先取观测行 metadata_json 的互认标识（如「陕HR」），无标识兜底「检验科区间」。
+ * 幂等键 = (metric_code, unit, low, high)（学习行 unit 非 NULL，同值不同标识不重复入库、先到先得）；
+ * 无单位或无区间不收（unit NULL 保留给字典基准行）。失败不阻断确认/纠正主流程（崩溃安全）。
  */
 async function ensureLearnedRange(
   db: Database,
@@ -29,13 +30,19 @@ async function ensureLearnedRange(
     unit: string | null;
     rangeLow: number | null;
     rangeHigh: number | null;
+    metadataJson: unknown;
   },
 ): Promise<void> {
   try {
-    const { metricCode, unit, rangeLow, rangeHigh } = row;
+    const { metricCode, unit, rangeLow, rangeHigh, metadataJson } = row;
     if (!metricCode) return;
     if (!unit || unit.trim() === '') return;
     if (rangeLow === null && rangeHigh === null) return;
+
+    // 互认标识（如「陕HR」）：只收非空字符串，其余一律兜底专业口径
+    const mark = (metadataJson as { interopMark?: unknown } | null)?.interopMark;
+    const source =
+      typeof mark === 'string' && mark.trim() !== '' ? mark.trim() : '检验科区间';
 
     const existing = await db
       .select({ id: referenceRanges.id })
@@ -44,7 +51,7 @@ async function ensureLearnedRange(
         and(
           eq(referenceRanges.metricCode, metricCode),
           eq(referenceRanges.unit, unit),
-          eq(referenceRanges.source, '化验单学习'),
+          isNotNull(referenceRanges.unit),
           rangeLow === null
             ? isNull(referenceRanges.rangeLow)
             : eq(referenceRanges.rangeLow, rangeLow),
@@ -66,7 +73,7 @@ async function ensureLearnedRange(
         rangeLow,
         rangeHigh,
         rangeText: null,
-        source: '化验单学习',
+        source,
         unit,
       })
       .onConflictDoNothing();
@@ -419,12 +426,14 @@ export const observationsRouter = createRouter({
       }
 
       // 化验单区间学习（spec 19 §4）：纠正后的行代表用户认可的数据——
-      // metricCode/unit 取纠正后的值，区间取行上的报告原文区间（correct 不改区间列）。
+      // metricCode/unit 取纠正后的值，区间取行上的报告原文区间（correct 不改区间列），
+      // source 沿用观测行的互认标识（如陕HR），无标识则「检验科区间」。
       await ensureLearnedRange(ctx.db, {
         metricCode: corrections.metricCode ?? current.metricCode,
         unit: corrections.unit ?? current.unit,
         rangeLow: current.referenceRangeLow,
         rangeHigh: current.referenceRangeHigh,
+        metadataJson: current.metadataJson,
       });
 
       emitEvent({
@@ -454,6 +463,7 @@ export const observationsRouter = createRouter({
           unit: observations.unit,
           rangeLow: observations.referenceRangeLow,
           rangeHigh: observations.referenceRangeHigh,
+          metadataJson: observations.metadataJson,
         });
 
       if (!result.length) {
@@ -461,12 +471,14 @@ export const observationsRouter = createRouter({
       }
 
       // 化验单区间学习（spec 19 §4）：确认 = 用户背书该报告原文区间 → 先查后插学习行
+      // source 沿用观测行的互认标识（如陕HR），无标识则「检验科区间」。
       const confirmed = result[0]!;
       await ensureLearnedRange(ctx.db, {
         metricCode: confirmed.metricCode,
         unit: confirmed.unit,
         rangeLow: confirmed.rangeLow,
         rangeHigh: confirmed.rangeHigh,
+        metadataJson: confirmed.metadataJson,
       });
 
       // Do not complete an import while an unmatched item still needs a user decision.
