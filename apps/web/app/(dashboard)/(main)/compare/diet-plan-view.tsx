@@ -381,7 +381,8 @@ export function DietPlanView() {
                   </thead>
                   <tbody>
                     {(cat.items ?? []).map((item, idx) => {
-                      const key = `${cat.category}-${item.name}-${idx}`;
+                      // 行 key 必须稳定：不能含 item.name（名称每敲一键就变，会导致整行重挂、输入框失焦）
+                      const key = `${cat.category}-${idx}`;
                       // 用户新增行（level 为空标记）：只填名称，档位/食用量/说明由 AI 下次生成时补全
                       const isNewCustomRow = editingDraft != null && item.level === "";
                       if (editingDraft) {
