@@ -1,4 +1,4 @@
-export { classifyDocumentPrompt } from './classify';
+export { classifyDocumentPrompt, classifyImagePrompt } from './classify';
 export { extractLabsPrompt } from './extract-labs';
 export { healthChatPrompt } from './health-chat';
 export { extractLabsImageZhPrompt } from './extract-labs-image-zh';

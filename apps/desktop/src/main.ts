@@ -1,16 +1,24 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const WEB_PORT = 43000;
-const WORKER_PORT = 43001;
-const POSTGRES_PORT = 43002;
+// Explicit overrides allow isolated package verification without colliding with
+// a running local installation. Normal desktop launches retain these defaults.
+const WEB_PORT = Number(process.env.HEALTHMANAGER_WEB_PORT ?? 43000);
+const WORKER_PORT = Number(process.env.HEALTHMANAGER_WORKER_PORT ?? 43001);
+const POSTGRES_PORT = Number(process.env.HEALTHMANAGER_POSTGRES_PORT ?? 43002);
 const DESKTOP_AUTH_SECRET = 'healthmanager-desktop-auth-secret-v1-9d5b1c7e3a4f';
 
 // Keep the established data directory while the internal package name evolves.
-// This preserves existing local accounts, sessions, and health records.
-app.setPath('userData', path.join(app.getPath('appData'), '@openvitals', 'desktop'));
+// This preserves existing local accounts, sessions, and health records. The
+// override is only for isolated packaging verification.
+app.setPath(
+  'userData',
+  process.env.HEALTHMANAGER_USER_DATA_DIR
+    ? path.resolve(process.env.HEALTHMANAGER_USER_DATA_DIR)
+    : path.join(app.getPath('appData'), '@openvitals', 'desktop'),
+);
 
 let services: ChildProcess[] = [];
 let postgresDataDir = '';
@@ -121,6 +129,51 @@ async function requireRuntimeFile(file: string) {
   }
 }
 
+async function restoreEmbeddedPersonalData() {
+  const source = runtimePath('personal-data', 'data');
+  const target = path.join(app.getPath('userData'), 'data');
+  try {
+    await access(path.join(source, 'postgres', 'PG_VERSION'));
+    await access(path.join(target, 'postgres', 'PG_VERSION'));
+    return;
+  } catch {
+    // Restore only when the destination has no initialized database.
+  }
+
+  try {
+    await access(path.join(source, 'postgres', 'PG_VERSION'));
+    await mkdir(path.dirname(target), { recursive: true });
+    await cp(source, target, { recursive: true, dereference: true, force: true });
+    // A staged cluster can retain the source instance's stale PID lock.
+    await rm(path.join(target, 'postgres', 'postmaster.pid'), { force: true });
+    // These PostgreSQL runtime directories can be empty and therefore absent
+    // from a copied cluster. PostgreSQL requires them to exist at startup.
+    await Promise.all([
+      'pg_notify',
+      'pg_replslot',
+      'pg_serial',
+      'pg_snapshots',
+      'pg_stat',
+      'pg_stat_tmp',
+      'pg_subtrans',
+      'pg_tblspc',
+      'pg_twophase',
+      'pg_commit_ts',
+      'pg_dynshmem',
+      'pg_logical',
+      'pg_logical/mappings',
+      'pg_logical/snapshots',
+      'pg_multixact',
+      'pg_multixact/members',
+      'pg_multixact/offsets',
+      'pg_wal/archive_status',
+      'pg_xact',
+    ].map((directory) => mkdir(path.join(target, 'postgres', directory), { recursive: true })));
+  } catch {
+    // Standard customer builds do not include personal-data, so there is nothing to restore.
+  }
+}
+
 function startService(command: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
   const child = spawn(command, args, {
     env,
@@ -161,6 +214,7 @@ async function waitFor(url: string, timeoutMs = 30_000) {
 }
 
 async function startLocalServices() {
+  await restoreEmbeddedPersonalData();
   const dataDir = path.join(app.getPath('userData'), 'data');
   const blobsDir = path.join(dataDir, 'blobs');
   postgresDataDir = path.join(dataDir, 'postgres');

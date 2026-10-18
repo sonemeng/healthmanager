@@ -27,5 +27,10 @@
   "packageManager": "pnpm@9.15.4",
   "engines": {
     "node": ">=20"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "builder-util@26.15.3": "patches/builder-util@26.15.3.patch"
+    }
   }
 }
