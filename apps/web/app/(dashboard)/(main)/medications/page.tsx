@@ -40,7 +40,7 @@ export default function MedicationsPage() {
   if (isLoading) {
     return (
       <div>
-        <TitleActionHeader title="用药记录" subtitle="Loading..." />
+        <TitleActionHeader title="用药记录" subtitle="加载中…" />
         <div className="mt-7 grid grid-cols-1 gap-4 md:grid-cols-2">
           {Array.from({ length: 2 }).map((_, i) => (
             <div key={i} className="card h-36 animate-pulse bg-neutral-50" />
@@ -53,11 +53,11 @@ export default function MedicationsPage() {
   if (items.length === 0) {
     return (
       <div>
-        <TitleActionHeader title="用药记录" subtitle="管理你的药物、补剂与服药依从性。" actions={<><Button variant="outline-subtle" size="sm" icon={<Download />} text="导出 CSV" onClick={() => downloadCsv('healthmanager-medications', ['Name', 'Generic Name', 'Category', 'Dosage', 'Frequency', 'Route', 'Prescriber', 'Indication', 'Status', 'Start Date', 'End Date'], [])} /><Button icon={<Plus />} text="添加药物" onClick={openAddModal} /></>} />
+        <TitleActionHeader title="用药记录" subtitle="管理你的药物、补剂与服药依从性。" actions={<><Button variant="outline-subtle" size="sm" icon={<Download />} text="导出 CSV" onClick={() => downloadCsv('healthmanager-medications', ['Name', 'Generic Name', 'Category', 'Dosage', 'Frequency', 'Route', 'Prescriber', 'Indication', 'Status', 'Start Date', 'End Date'], [])} /><Button size="sm" icon={<Plus />} text="添加药物" onClick={openAddModal} /></>} />
         <div className="mt-7">
           <AnimatedEmptyState
             title="尚未添加药物"
-            description="Add a medication to start tracking your prescriptions, supplements, and adherence."
+            description="添加药物、补剂或非处方药，开始记录处方与服药情况。"
             cardIcon={({ index }) => emptyIcons[index % emptyIcons.length]!}
             addButton={
               <Button text="添加药物" icon={<Plus className="h-4 w-4" />} onClick={openAddModal} />
@@ -74,11 +74,9 @@ export default function MedicationsPage() {
 
   return (
     <div>
-      <TitleActionHeader
+        <TitleActionHeader
         title="用药记录"
         subtitle="管理你的药物、补剂与服药依从性。"
-        onAddButtonClick={openAddModal}
-        addButtonText="添加药物"
         actions={<>
           <>
             <Button
@@ -107,6 +105,8 @@ export default function MedicationsPage() {
               }}
             />
             <Button variant="outline-subtle" size="sm" icon={<Download />} text="导出详细文档" onClick={() => downloadText('healthmanager-medications-detail', ['# HealthManager 用药记录', '', `生成日期：${new Date().toISOString().slice(0, 10)}`, '', ...(items.length ? items.map((m) => `## ${m.name}\n- 状态：${m.isActive ? '在用' : '已停用'}\n- 剂量：${m.dosage ?? '未记录'}\n- 频次：${m.frequency ?? '未记录'}\n- 用途：${m.indication ?? '未记录'}\n- 开方医生：${m.prescriber ?? '未记录'}\n- 起止日期：${m.startDate ?? '未记录'} 至 ${m.endDate ?? '至今'}`) : ['暂无用药记录。']), '', '本文件含个人健康信息，仅应分享给可信的家人、照护者或医疗专业人员。'].join('\n'), 'text/markdown;charset=utf-8', 'md')} />
+            {/* actions 存在时 TitleActionHeader 不会渲染 onAddButtonClick，添加按钮必须放进 actions */}
+            <Button size="sm" icon={<Plus />} text="添加药物" onClick={openAddModal} />
           </>
         </>}
       />
@@ -117,7 +117,7 @@ export default function MedicationsPage() {
       {active.length > 0 && (
         <div className="mt-7 mb-6">
           <h2 className="mb-4 text-lg font-medium tracking-[-0.015em] text-neutral-900 font-display">
-            Active
+            在用
           </h2>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {active.map((med) => (
@@ -142,7 +142,7 @@ export default function MedicationsPage() {
       {discontinued.length > 0 && (
         <div className={active.length === 0 ? 'mt-7' : ''}>
           <h2 className="mb-4 text-lg font-medium tracking-[-0.015em] text-neutral-900 font-display">
-            Discontinued
+            已停用
           </h2>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             {discontinued.map((med) => (

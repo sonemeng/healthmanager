@@ -1,11 +1,13 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc/client';
 import { deriveStatus } from '@/lib/health-utils';
 import { formatDate, formatObsValue } from '@/lib/utils';
 import { StatusBadge, type HealthStatus } from '@/components/health/status-badge';
 import { MiniSparkline } from '@/components/health/mini-sparkline';
+import { Button } from '@/components/button';
 import {
   TrendingUp,
   TrendingDown,
@@ -13,6 +15,7 @@ import {
   Pill,
   ArrowRight,
   GitCompareArrows,
+  AlertCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -41,7 +44,16 @@ interface MedicationCorrelation {
   metrics: CorrelationMetric[];
 }
 
+const healthStatusLabel: Record<HealthStatus, string> = {
+  normal: '正常',
+  warning: '异常',
+  critical: '显著异常',
+  info: '提示',
+  neutral: '—',
+};
+
 export default function CorrelationsPage() {
+  const router = useRouter();
   const observations = trpc.observations.list.useQuery({ limit: 200 });
   const medications = trpc.medications.list.useQuery({});
   const metricDefs = trpc.metrics.list.useQuery();
@@ -53,6 +65,10 @@ export default function CorrelationsPage() {
   const obsItems = observations.data?.items ?? [];
   const medItems = medications.data?.items ?? [];
   const defs = metricDefs.data ?? [];
+
+  // 关联分析依赖用药开始日期：没有 start_date 的药物无法划分「用药前 / 用药后」
+  const medsWithStart = medItems.filter((m) => m.startDate).length;
+  const medsMissingStart = medItems.length - medsWithStart;
 
   const defMap = useMemo(() => {
     const map = new Map<string, { name: string; unit: string | null; displayPrecision: number | null }>();
@@ -95,8 +111,10 @@ export default function CorrelationsPage() {
           (o) => new Date(o.observedAt).getTime() >= medStart && o.valueNumeric != null,
         );
 
-        // Need data on both sides to show a correlation
-        if (before.length < 2 || after.length < 2) continue;
+        // 用药前后各至少 1 次即可对比（本地数据常见「每批次每指标一次」，
+        // 若要求各 2 次，绝大多数指标会被直接过滤，功能等同不可用）；
+        // 样本量不足 2 的会在行内标注「样本少，仅供参考」。
+        if (before.length === 0 || after.length === 0) continue;
 
         const beforeAvg = before.reduce((sum, o) => sum + (o.valueNumeric ?? 0), 0) / before.length;
         const afterAvg = after.reduce((sum, o) => sum + (o.valueNumeric ?? 0), 0) / after.length;
@@ -195,6 +213,18 @@ export default function CorrelationsPage() {
   }
 
   if (correlations.length === 0) {
+    const noMeds = medItems.length === 0;
+    const noStartDate = medItems.length > 0 && medsWithStart === 0;
+    const heading = noMeds
+      ? '还没有用药记录'
+      : noStartDate
+        ? '用药记录缺少开始日期'
+        : '暂无可对比的指标';
+    const description = noMeds
+      ? '先在「用药记录」中添加药物并填写开始日期，之后就能对比用药前后的指标变化。'
+      : noStartDate
+        ? `现有 ${medItems.length} 条用药记录都没有填写开始日期，无法划分「用药前」与「用药后」。补填开始日期后即可分析。`
+        : '已有可分析的用药记录，但同一指标在开始用药前后还没有检验结果。导入或补录检验报告后再来看。';
     return (
       <div>
         <h1 className="text-[24px] font-display font-medium tracking-[-0.03em] text-neutral-900 mb-6">
@@ -202,10 +232,16 @@ export default function CorrelationsPage() {
         </h1>
         <div className="card p-8 text-center">
           <GitCompareArrows className="size-8 text-neutral-300 mx-auto mb-3" />
-          <h2 className="text-[16px] font-semibold text-neutral-900 font-display">暂无关联分析结果</h2>
+          <h2 className="text-[16px] font-semibold text-neutral-900 font-display">{heading}</h2>
           <p className="text-[13px] text-neutral-500 font-body mt-1 max-w-md mx-auto">
-            需要同一指标在开始用药前后各至少有 2 次有效化验结果，才能显示前后变化。
+            {description}
           </p>
+          {(noMeds || noStartDate) && (
+            <div className="mt-4 flex justify-center">
+              {/* 空态 CTA 沿用全站规范（AnimatedEmptyState.addButton）：黑底实心 + 左侧图标 */}
+              <Button text="前往用药记录" icon={<Pill />} onClick={() => router.push('/medications')} />
+            </div>
+          )}
         </div>
       </div>
     );
@@ -226,6 +262,22 @@ export default function CorrelationsPage() {
         </p>
       </div>
 
+      {medsMissingStart > 0 && (
+        // 「数据不完整导致结果可能偏差」属提醒类，沿用全站提醒色（uploads / compare 同款 amber）
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50/70 px-4 py-3">
+          <p className="flex items-start gap-2 text-[12px] leading-relaxed text-amber-800">
+            <AlertCircle className="mt-px size-3.5 shrink-0" />
+            <span>另有 {medsMissingStart} 条用药记录未填写开始日期，暂未纳入分析。</span>
+          </p>
+          <Button
+            variant="outline-subtle"
+            size="sm"
+            text="去补填日期"
+            onClick={() => router.push('/medications')}
+          />
+        </div>
+      )}
+
       {/* Medication selector */}
       {correlations.length > 1 && (
         <div className="flex gap-2 mb-4 flex-wrap">
@@ -243,7 +295,7 @@ export default function CorrelationsPage() {
               <Pill className="size-3" />
               {c.medicationName}
               <span className="text-[10px] font-mono text-neutral-400 ml-1">
-                {c.metrics.length} metrics
+                {c.metrics.length} 项指标
               </span>
             </button>
           ))}
@@ -272,10 +324,10 @@ export default function CorrelationsPage() {
               </div>
               <div className="text-right">
                 <span className="text-[11px] font-mono text-neutral-500 block">
-                  Started {formatDate(effectiveSelected.startDate)}
+                  开始于 {formatDate(effectiveSelected.startDate)}
                 </span>
                 <span className="text-[10px] font-mono text-neutral-400">
-                  {effectiveSelected.daysSinceStart} days ago
+                  已用药 {effectiveSelected.daysSinceStart} 天
                 </span>
               </div>
             </div>
@@ -285,19 +337,19 @@ export default function CorrelationsPage() {
               {improved.length > 0 && (
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold text-health-normal">
                   <TrendingUp className="size-3" />
-                  {improved.length} improved
+                  {improved.length} 项好转
                 </span>
               )}
               {worsened.length > 0 && (
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold text-health-warning">
                   <TrendingDown className="size-3" />
-                  {worsened.length} worsened
+                  {worsened.length} 项恶化
                 </span>
               )}
               {unchanged.length > 0 && (
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold text-neutral-400">
                   <Minus className="size-3" />
-                  {unchanged.length} stable
+                  {unchanged.length} 项稳定
                 </span>
               )}
             </div>
@@ -368,11 +420,14 @@ function CorrelationSection({
                 {m.metricName}
               </span>
               <div className="flex items-center gap-1 mt-0.5">
-                <StatusBadge status={m.beforeStatus} label={m.beforeStatus} />
+                <StatusBadge status={m.beforeStatus} label={healthStatusLabel[m.beforeStatus]} />
                 <ArrowRight className="size-3 text-neutral-300" />
-                <StatusBadge status={m.afterStatus} label={m.afterStatus} />
+                <StatusBadge status={m.afterStatus} label={healthStatusLabel[m.afterStatus]} />
               </div>
-              <span className="mt-1 block text-[10px] font-mono text-neutral-400">用药前 {m.beforeCount} 次，用药后 {m.afterCount} 次</span>
+              <span className="mt-1 block text-[10px] font-mono text-neutral-400">
+                用药前 {m.beforeCount} 次，用药后 {m.afterCount} 次
+                {(m.beforeCount < 2 || m.afterCount < 2) && '（样本少，仅供参考）'}
+              </span>
             </div>
 
             {/* Before/After values */}

@@ -149,6 +149,7 @@ export default function ConditionsPage() {
             </>
           )}
           <Button
+            size="sm"
             icon={<Plus />}
             text="添加病史"
             onClick={() => modal.show(<AddConditionModal />)}

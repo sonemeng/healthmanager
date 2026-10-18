@@ -110,8 +110,19 @@ export function formatObsValue(
     return formatDuration(valueNumeric);
   }
   if (valueNumeric != null) {
-    if (displayPrecision != null) return valueNumeric.toFixed(displayPrecision);
-    return String(valueNumeric);
+    // 化验单原文优先：保留原始值的有效小数位，不用字典精度截断（1.27 不显示为 1.3）
+    const raw = String(valueNumeric);
+    const decLen = raw.includes('.') ? raw.length - raw.indexOf('.') - 1 : 0;
+    // 浮点噪声兜底：小数位异常长时截到 6 位并去尾零
+    if (decLen > 6) {
+      const trimmed = Number(valueNumeric.toFixed(6));
+      return String(trimmed);
+    }
+    // 字典精度只用于补足最短小数位，不丢弃原始精度
+    if (displayPrecision != null && decLen < displayPrecision) {
+      return valueNumeric.toFixed(displayPrecision);
+    }
+    return raw;
   }
   return valueText ?? '—';
 }

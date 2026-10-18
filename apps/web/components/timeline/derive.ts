@@ -481,6 +481,107 @@ export function deriveSeries(
   };
 }
 
+export interface ValueAxis {
+  /** [下界, 上界]，均为 step 的整数倍 */
+  domain: [number, number];
+  /** 一格的高度（1/2/5×10^n） */
+  step: number;
+  /** 显式刻度值（含两端），相邻间距恒为 step */
+  ticks: number[];
+}
+
+/**
+ * 纵轴自适应区间：把数据范围外扩到 1/2/5×10^n 整刻度，**数据顶点上方固定留一整格**。
+ *
+ * 算法四步：
+ * 1. 目标段数 tickCount → 原始步长 raw = 跨度 / tickCount；
+ * 2. 把 raw 归到 1/2/5×10^n 的「整刻度」，得到 step；
+ * 3. 下界 floor(a/step)、上界 ceil(b/step) + step；
+ * 4. 下界余量不足半格再让一格（非负指标锁 0，不画负数）。
+ *
+ * 为什么上界一律多一格（2026-10-18 用户第二次修正）：
+ * - 只 floor/ceil 时极值可正好落在刻度线上，余量为 0（mpv 11.8~11.9、尿肌酐 98.1%）；
+ * - 「不足半格才补一格」仍不够：实测 75 个指标里 16 个顶点距上沿不足半个屏幕刻度，
+ *   最差 alt 只有 11px，点半径 4.5px，看着就是被切掉；
+ * - 用户口径：「最大值大于半个刻度就向上多一个刻度，或者直接多一个刻度」。
+ *   一律多一格后，顶点距上沿中位 33 → 41px，不足半刻度的 16 → 7 个，最差 11 → 20px。
+ *
+ * 另外必须把 ticks 显式算出来：算法里的 step 与 recharts 默认 5 等分（4 段）不是一回事，
+ * 不显式给刻度，用户看到的「半格」其实是 0.8 个 step，留白永远显得不够。
+ */
+export function niceValueAxis(
+  lo: number,
+  hi: number,
+  tickCount = 8,
+): ValueAxis {
+  const round = (v: number) => Number(v.toFixed(10));
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+    return { domain: [0, 1], step: 0.25, ticks: [0, 0.25, 0.5, 0.75, 1] };
+  }
+  let a = Math.min(lo, hi);
+  let b = Math.max(lo, hi);
+  if (b - a < 1e-12) {
+    const d = Math.abs(b) > 1e-12 ? Math.abs(b) * 0.1 : 1;
+    a -= d;
+    b += d;
+  }
+  const raw = (b - a) / Math.max(1, tickCount);
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  let lower = Math.floor(a / step) * step;
+  // 顶点上方固定一整格：ceil 后再加一格，余量落在 [1, 2) 格，绝不可能贴边
+  const upper = Math.ceil(b / step) * step + step;
+  if (a - lower < step * 0.5) lower -= step;
+  // 非负指标不往下画到负数（白细胞 0~3.92 若留白会得到 -0.5，没有意义）
+  if (a >= 0 && lower < 0) lower = 0;
+
+  const segs = Math.round((upper - lower) / step);
+  const ticks: number[] = [];
+  // 段数过多时不硬塞刻度（标签会叠），交给 recharts 自己均分
+  if (segs > 0 && segs <= 14) {
+    for (let i = 0; i <= segs; i += 1) ticks.push(round(lower + i * step));
+  }
+  return { domain: [round(lower), round(upper)], step: round(step), ticks };
+}
+
+export function niceValueDomain(
+  lo: number,
+  hi: number,
+  tickCount = 8,
+): [number, number] {
+  return niceValueAxis(lo, hi, tickCount).domain;
+}
+
+/**
+ * 单条序列的纵轴区间：**只看实测数值**，参考区间不参与。
+ *
+ * 演进记录（都踩过）：
+ * - recharts 默认 `[0, 'auto']`（axisSelectors.js:147）：空腹血糖 6.4~7.21 被 nicetick
+ *   成 0~8，两点落在绘图区 80%/90% 高度，整条曲线只剩顶部 18px。
+ * - 把参考区间整体并入：血小板实测 103~106、参考 125~350，轴变 100~400，
+ *   曲线只剩 1.8px，比默认还糟。
+ * - 「只就近吸收参考边界」：多数指标没差别，但数据远离参考区间时仍会把轴撑大。
+ * 用户 2026-10-18 定调：**分辨率优先，色带压缩/被裁都无所谓**。
+ * 因此这里彻底不引入参考区间；色带超出纵轴会被裁切，参考区间数值改由图例文字给出，
+ * 信息不丢。数据点永远落在轴内，不存在「为了色带把点画丢」的可能。
+ *
+ * 另外，极值必须离轴边界留出一整格（见 niceValueAxis）：只 floor/ceil 时，
+ * 数据顶点会正好压在轴线上，点被画在图边像「显示不全」。
+ */
+export function seriesValueDomain(s: MetricSeries): [number, number] {
+  const vals = s.points.map((p) => p.v).filter((v) => Number.isFinite(v));
+  if (vals.length === 0) return [0, 1];
+  return niceValueDomain(Math.min(...vals), Math.max(...vals));
+}
+
+/** 同 seriesValueDomain，但连刻度一起给出，供 YAxis 显式指定 ticks */
+export function seriesValueAxis(s: MetricSeries): ValueAxis {
+  const vals = s.points.map((p) => p.v).filter((v) => Number.isFinite(v));
+  if (vals.length === 0) return niceValueAxis(0, 1);
+  return niceValueAxis(Math.min(...vals), Math.max(...vals));
+}
+
 /* ------------------------------ 列表视图 ------------------------------ */
 
 export function deriveListEvents(
@@ -581,6 +682,68 @@ export function computeDomain(values: number[]): TimeWindow {
   }
   const pad = (max - min) * 0.03;
   return { start: min - pad, end: max + pad };
+}
+
+/* -------------------------- 时间窗口的缩放与平移 -------------------------- */
+
+/**
+ * 把窗口夹回 domain 内，并保证跨度不低于下限。
+ *
+ * `dSpan / 500` 这层是为了极长病史：只按一天做下限时，几年的时间轴仍能缩到
+ * 一天，刻度会挤成一团；按总跨度的 1/500 收口，任何数据量下刻度都不会爆。
+ */
+function clampWindow(w: TimeWindow, domain: TimeWindow, minSpan: number): TimeWindow {
+  const dSpan = Math.max(1, domain.end - domain.start);
+  const floor = Math.min(Math.max(minSpan, dSpan / 500), dSpan);
+  const span = Math.min(Math.max(w.end - w.start, floor), dSpan);
+  let start = w.start;
+  if (start < domain.start) start = domain.start;
+  if (start + span > domain.end) start = domain.end - span;
+  return { start, end: start + span };
+}
+
+/**
+ * 缩放时间窗口。
+ *
+ * @param anchorRatio 锚点在当前窗口中的位置（0=左端，1=右端），通常取鼠标 x 的比例。
+ *   锚点处的时间值在缩放前后保持不变，手感才是「指着哪里缩哪里」。
+ * @param factor      >1 放大跨度（看更宽），<1 收窄跨度（看更细）。
+ *
+ * 曲线图 / 泳道 / 分面小图共用同一个 TimeWindow，交互只改这个窗口，
+ * 三者才会同步；边界处理集中在这里，组件只负责把鼠标位置换成比例。
+ */
+export function zoomWindow(
+  win: TimeWindow,
+  domain: TimeWindow,
+  anchorRatio: number,
+  factor: number,
+  minSpan = DAY_MS,
+): TimeWindow {
+  const dSpan = Math.max(1, domain.end - domain.start);
+  const span = Math.max(1, win.end - win.start);
+  const a = Math.min(1, Math.max(0, Number.isFinite(anchorRatio) ? anchorRatio : 0.5));
+  const floor = Math.min(Math.max(minSpan, dSpan / 500), dSpan);
+  const nextSpan = Math.min(dSpan, Math.max(floor, span * (Number.isFinite(factor) ? factor : 1)));
+  const anchor = win.start + span * a;
+  const start = anchor - nextSpan * a;
+  return clampWindow({ start, end: start + nextSpan }, domain, minSpan);
+}
+
+/**
+ * 平移时间窗口。
+ *
+ * @param deltaRatio 位移占当前跨度的比例：正值看更晚（窗口右移），负值看更早。
+ *   拖拽时传 `(按下点 x - 当前 x) / 绘图宽度`，向左拖即向未来走，符合「抓住图往左拉」。
+ */
+export function panWindow(
+  win: TimeWindow,
+  domain: TimeWindow,
+  deltaRatio: number,
+  minSpan = DAY_MS,
+): TimeWindow {
+  const span = Math.max(1, win.end - win.start);
+  const shift = span * (Number.isFinite(deltaRatio) ? deltaRatio : 0);
+  return clampWindow({ start: win.start + shift, end: win.end + shift }, domain, minSpan);
 }
 
 export interface Tick {

@@ -100,6 +100,9 @@ export function TitleActionHeader({
           </div>
         </div>
         <div className="flex shrink-0 gap-2 flex-wrap">
+          {/* 渲染优先级：actions > actionButtons > onAddButtonClick。
+              一旦传了 actions，onAddButtonClick / addButtonText 就不会渲染，
+              需要添加按钮时必须把它自己放进 actions（medications 页曾因此丢掉「添加药物」入口）。 */}
           {actions ? (
             actions
           ) : actionButtons ? (

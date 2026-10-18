@@ -155,6 +155,7 @@ export default function EncountersPage() {
             </>
           )}
           <Button
+            size="sm"
             icon={<Plus />}
             text="记录就诊"
             onClick={() => modal.show(<AddEncounterModal />)}

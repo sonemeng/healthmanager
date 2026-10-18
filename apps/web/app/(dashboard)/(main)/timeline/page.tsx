@@ -433,7 +433,9 @@ function TimelinePageInner() {
             selected={activeCodes}
             onSelectedChange={handleSelectedChange}
             win={win}
+            domain={domain}
             onWindowChange={handleWindowChange}
+            onResetWindow={() => setCustomWin(null)}
             granularity={granularity}
             onGranularityChange={setGranularity}
             ticks={ticks}

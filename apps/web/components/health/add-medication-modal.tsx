@@ -8,6 +8,7 @@ import { useModal } from '@/components/modal/provider';
 import { trpc } from '@/lib/trpc/client';
 import { cn } from '@/lib/utils';
 import { ChevronDown } from 'lucide-react';
+import { toast } from 'sonner';
 import { ModuleImportButton } from './module-import-button';
 
 const inputClass =
@@ -74,20 +75,26 @@ export function AddMedicationModal({ medication }: { medication?: EditableMedica
   const createMutation = trpc.medications.create.useMutation({
     onSuccess: () => {
       utils.medications.list.invalidate();
+      toast.success('用药记录已添加');
       modal.hide();
     },
+    onError: (error) => toast.error(error.message),
   });
   const updateMutation = trpc.medications.update.useMutation({
     onSuccess: () => {
       utils.medications.list.invalidate();
+      toast.success('用药记录已保存');
       modal.hide();
     },
+    onError: (error) => toast.error(error.message),
   });
   const recordChangeMutation = trpc.medications.recordChange.useMutation({
     onSuccess: () => {
       utils.medications.list.invalidate();
+      toast.success('已记录新的用药阶段');
       modal.hide();
     },
+    onError: (error) => toast.error(error.message),
   });
 
   // 原本在用、仍保持停用状态不变，且用量/频次有改动 → 提供分段选择
@@ -179,7 +186,7 @@ export function AddMedicationModal({ medication }: { medication?: EditableMedica
           transition={{ delay: fieldDelay * 0 }}
         >
           <label className={labelClass}>
-            Name <span className="text-red-400">*</span>
+            名称 <span className="text-red-400">*</span>
           </label>
           <input
             type="text"
@@ -196,7 +203,7 @@ export function AddMedicationModal({ medication }: { medication?: EditableMedica
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: fieldDelay * 1 }}
         >
-          <label className={labelClass}>Category</label>
+          <label className={labelClass}>类别</label>
           <div className="flex gap-1 border border-neutral-200 bg-neutral-50 p-1">
             {categories.map((cat) => (
               <button
@@ -223,17 +230,17 @@ export function AddMedicationModal({ medication }: { medication?: EditableMedica
           className="grid grid-cols-2 gap-3"
         >
           <div>
-            <label className={labelClass}>Dosage</label>
+            <label className={labelClass}>剂量</label>
             <input
               type="text"
               className={inputClass}
-              placeholder="e.g. 10mg"
+              placeholder="如：10mg"
               value={dosage}
               onChange={(e) => setDosage(e.target.value)}
             />
           </div>
           <div>
-            <label className={labelClass}>Frequency</label>
+            <label className={labelClass}>频次</label>
             <input
               type="text"
               className={inputClass}
@@ -251,7 +258,7 @@ export function AddMedicationModal({ medication }: { medication?: EditableMedica
           className="grid grid-cols-2 gap-3"
         >
           <div>
-            <label className={labelClass}>Route</label>
+            <label className={labelClass}>用法</label>
             <input
               type="text"
               className={inputClass}
@@ -261,7 +268,7 @@ export function AddMedicationModal({ medication }: { medication?: EditableMedica
             />
           </div>
           <div>
-            <label className={labelClass}>Prescriber</label>
+            <label className={labelClass}>开方医生</label>
             <input
               type="text"
               className={inputClass}
@@ -277,7 +284,7 @@ export function AddMedicationModal({ medication }: { medication?: EditableMedica
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: fieldDelay * 4 }}
         >
-          <label className={labelClass}>Indication</label>
+          <label className={labelClass}>用途</label>
           <textarea
             className={cn(inputClass, 'resize-none')}
             rows={2}
@@ -292,13 +299,16 @@ export function AddMedicationModal({ medication }: { medication?: EditableMedica
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: fieldDelay * 5 }}
         >
-          <label className={labelClass}>Start date</label>
+          <label className={labelClass}>开始日期</label>
           <input
             type="date"
             className={inputClass}
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
           />
+          <p className="mt-1 text-[11px] text-neutral-400">
+            填写后可在「关联分析」中对比用药前后的指标变化。
+          </p>
         </motion.div>
 
         {/* 编辑模式：用药状态 + 用量变化的分段选择 */}
@@ -412,11 +422,11 @@ export function AddMedicationModal({ medication }: { medication?: EditableMedica
               className="flex items-center gap-1 text-[13px] text-neutral-500 hover:text-neutral-700 transition-colors"
             >
               <ChevronDown className="h-3.5 w-3.5" />
-              Add notes
+              添加备注
             </button>
           ) : (
             <div>
-              <label className={labelClass}>Notes</label>
+              <label className={labelClass}>备注</label>
               <textarea
                 className={cn(inputClass, 'resize-none')}
                 rows={3}
