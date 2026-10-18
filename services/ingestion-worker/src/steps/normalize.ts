@@ -1,6 +1,6 @@
 import { getDb } from '@openvitals/database/client';
 import type { Database } from '@openvitals/database/client';
-import { importJobs, metricDefinitions, unitConversions, referenceRanges, users } from '@openvitals/database';
+import { importJobs, metricDefinitions, unitConversions, referenceRanges, users, profiles } from '@openvitals/database';
 import { eq } from 'drizzle-orm';
 import type { WorkflowContext } from '../workflow';
 import type { RawExtraction, NormalizationResult, MetricDefinition } from '@openvitals/ingestion';
@@ -22,7 +22,15 @@ export function hashCleanedName(s: string): string {
 
 /** 自学习条目 category 关键词启发式（spec 13 §四.1） */
 export function inferAutoCategory(cleaned: string): string {
-  if (cleaned.includes('尿')) return 'urinalysis';
+  // 尿沉渣有形成分（管型/上皮细胞/结晶/细菌…）名字里带「细胞/蛋白」，
+  // 旧顺序会先命中 hematology/metabolic —— 先判尿液语境。
+  if (
+    /(尿|管型|上皮细胞|结晶|细菌|酵母|滴虫|隐血|酮体|亚硝酸盐|浊度|颜色|比重|粘液丝)/.test(
+      cleaned,
+    )
+  ) {
+    return 'urinalysis';
+  }
   if (cleaned.includes('细胞') || cleaned.includes('血红蛋白') || cleaned.includes('血小板')) return 'hematology';
   if (cleaned.includes('蛋白')) return 'metabolic';
   return 'metabolic';
@@ -81,7 +89,7 @@ export async function ensureAutoMetric(
 
   try {
     // b) 清洗名重跑匹配
-    const hit = matchMetric(cleanedName, currentDefs);
+    const hit = matchMetric(cleanedName, currentDefs, first.unit);
     if (hit) {
       // C6 闸：清洗后已被该条目 name/aliases 覆盖 → 原文是同一条目的异写，不灌噪声
       if (isCoveredByDef(hit, cleanedName)) return;
@@ -179,18 +187,38 @@ export async function normalize(
     rangesByMetric.set(r.metricCode, existing);
   }
 
-  // Fetch user demographics
-  let demographics: UserDemographics | null = null;
+  // 人口学信息取自**本次任务所属档案**，不是账号本人：
+  // 一个账号下有多个档案（本人/家人），血常规、胆红素、ALP 的参考区间按性别/年龄分档，
+  // 用账号性别会把「刘丙友（男）」的报告套成「吴菊兰（女）」的区间，反向也一样。
+  // 档案未填性别/生日时，才回退到账号（保持旧行为，不至于退化成「无人区」）。
+  const [job] = await db
+    .select({ profileId: importJobs.profileId })
+    .from(importJobs)
+    .where(eq(importJobs.id, ctx.importJobId))
+    .limit(1);
+
+  const [profile] = job?.profileId
+    ? await db
+        .select({ gender: profiles.gender, birthDate: profiles.birthDate })
+        .from(profiles)
+        .where(eq(profiles.id, job.profileId))
+        .limit(1)
+    : [];
+
   const [user] = await db
     .select({ dateOfBirth: users.dateOfBirth, biologicalSex: users.biologicalSex })
     .from(users)
     .where(eq(users.id, ctx.userId))
     .limit(1);
 
-  if (user) {
+  const sex = profile?.gender ?? user?.biologicalSex ?? null;
+  const birthDate = profile?.birthDate ?? user?.dateOfBirth ?? null;
+
+  let demographics: UserDemographics | null = null;
+  if (sex !== null || birthDate !== null) {
     let ageInYears: number | null = null;
-    if (user.dateOfBirth) {
-      const dob = new Date(user.dateOfBirth);
+    if (birthDate) {
+      const dob = new Date(birthDate);
       const now = new Date();
       ageInYears = now.getFullYear() - dob.getFullYear();
       const monthDiff = now.getMonth() - dob.getMonth();
@@ -198,10 +226,7 @@ export async function normalize(
         ageInYears--;
       }
     }
-    demographics = {
-      sex: user.biologicalSex ?? null,
-      ageInYears,
-    };
+    demographics = { sex, ageInYears };
   }
 
   const metricDefs: MetricDefinition[] = metrics.map((m) => ({

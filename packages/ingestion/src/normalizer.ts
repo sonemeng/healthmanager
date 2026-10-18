@@ -59,6 +59,63 @@ function containsBidirectional(a: string, b: string): boolean {
 }
 
 /**
+ * L4 包含层的「限定词」闸（2026-10-18，串项缺陷根治）。
+ *
+ * 包含匹配本身无法区分「同一项目的不同写法」和「另一个检验项目」：
+ *   - 「红细胞计数」↔「红细胞」  → 同一项目，多出的是写法（计数）
+ *   - 「平均红细胞蛋白量」↔「红细胞」 → **另一个项目**（MCH），多出的是限定词
+ * 旧实现只看包含关系，用户库里 4 个指标串了 21 条观测（rbc 吞掉尿沉渣红细胞/
+ * MCH/异形红细胞/有核红细胞，wbc 吞掉尿沉渣白细胞/白细胞团/酯酶）。
+ *
+ * 判定：较长的名字减掉较短的名字，剩下的字符若只由「中性写法词」组成 → 允许 L4；
+ * 只要残留里还有任何实质限定词（平均/有核/异形/尿/沉渣/透明/小圆/团/非…）→ 拒绝 L4，
+ * 让这条分析物去 L1–L3 精确命中，或落到自学习新建**独立条目**。
+ * 失败方向是「多一个条目」而不是「两条数据串在一起」——后者会污染趋势与参考区间。
+ */
+/**
+ * 残留里出现这些词 → 视为「同一项目的写法差异」，L4 允许通过。
+ * 两类：
+ *   1) 书写差异：计数/测定/定量/浓度/量/比值/结合力/cv/sd…
+ *   2) **标本词**：尿/血清/血浆/全血。同一分析物在报告上常省略标本前缀
+ *      （「微量白蛋白」=「尿微量白蛋白」、「酮体」=「尿酮体」），
+ *      这类省略不能当成限定词拒掉。
+ * 注意「沉渣」不在此列——「尿沉渣红细胞」与「红细胞」是两个项目。
+ */
+const NEUTRAL_RESIDUALS = [
+  '计数',
+  '测定',
+  '定量',
+  '定性',
+  '浓度',
+  '含量',
+  '检查',
+  '结果',
+  '值',
+  '空腹',
+  '随机',
+  '比值',
+  '结合力',
+  '量',
+  'cv',
+  'sd',
+  '尿',
+  '血清',
+  '血浆',
+  '全血',
+  // 必须按长度降序处理：否则单字「值」会先把「比值」拆成「比」，
+  // 残留里凭空多出一个限定词（2026-10-18 差分探针实测踩到）。
+].sort((a, b) => b.length - a.length);
+
+function hasQualifierResidual(analyte: string, defName: string): boolean {
+  const long = analyte.length >= defName.length ? analyte : defName;
+  const short = long === analyte ? defName : analyte;
+  if (!long.includes(short)) return false; // 非包含关系（或含多次），不在此闸判定
+  let rest = long.split(short).join('');
+  for (const neutral of NEUTRAL_RESIDUALS) rest = rest.split(neutral).join('');
+  return rest.length > 0;
+}
+
+/**
  * L4 包含层的排除规则：命中即否决该指标在这一层的候选资格
  * （防止长名指标被短名指标吞掉）。**只在 L4 生效**——精确匹配（L1–L3）不受其影响。
  */
@@ -69,7 +126,23 @@ const L4_EXCLUSIONS: Record<string, { contains?: string[]; endsWith?: string[] }
   uric_acid: { contains: ['尿酸碱度', '酸碱度'] },
   hemoglobin: { contains: ['平均血红蛋白'] },
   platelets: { contains: ['分布宽度', '压积', '比积', '平均', '大血小板', '大型血小板'] },
-  wbc: { contains: ['酯酶'] },
+  wbc: { contains: ['酯酶', '团', '尿'] },
+  // 红细胞是全库最容易被吞的名字：血常规 RBC 之外还有尿沉渣红细胞、MCH、
+  // 异形红细胞率、有核红细胞、红细胞压积/分布宽度。这一层是兜底，
+  // 主闸在 hasQualifierResidual（按残留限定词判定）。
+  rbc: {
+    contains: [
+      '平均红细胞',
+      '有核红细胞',
+      '异形红细胞',
+      '畸形红细胞',
+      '红细胞比容',
+      '红细胞压积',
+      '分布宽度',
+      '尿',
+      '沉渣',
+    ],
+  },
   rdw: { endsWith: ['sd'] },
 };
 
@@ -108,6 +181,9 @@ function scoreDefinition(
   const candidates = [cleanForMatch(def.name), ...def.aliases.map(cleanForMatch)];
   for (const c of candidates) {
     if (!containsBidirectional(c, cleaned)) continue;
+    // 限定词闸：多出来的字不是「计数/测定」这类写法差异，而是另一个项目的限定词
+    // （平均红细胞…/有核红细胞…/尿沉渣红细胞、非透明管型、小圆上皮细胞…）→ 本层不成立
+    if (hasQualifierResidual(cleaned, c)) continue;
     const minLen = Math.min(c.length, cleaned.length);
     const maxLen = Math.max(c.length, cleaned.length);
     const score = 400 + Math.floor((200 * minLen) / maxLen);
@@ -116,28 +192,55 @@ function scoreDefinition(
   return best;
 }
 
+/** 条目声明过的单位集合（字典基准单位 + 参考区间行单位），用于 L3 平分的单位裁决 */
+function declaredUnits(def: MetricDefinition): string[] {
+  const raw = [def.unit, ...(def.demographicRanges ?? []).map((r) => r.unit)];
+  const out: string[] = [];
+  for (const u of raw) {
+    const c = canonicalUnit(u ?? null);
+    if (c) out.push(c);
+  }
+  return out;
+}
+
 /**
  * 评分制匹配（替代「逐层 find 首个命中」）：对全部字典条目计分取最高，
- * **平分按 metric id 字典序 tie-break**（保证确定性，不依赖 DB 无 ORDER BY 的返回顺序）。
+ * **平分时先看单位是否对得上，再按 metric id 字典序 tie-break**
+ * （保证确定性，不依赖 DB 无 ORDER BY 的返回顺序）。
+ *
+ * 单位裁决解决的是裸名歧义：「红细胞」+「/μL」是尿沉渣红细胞，
+ * 「红细胞」+「10^12/L」是血常规 RBC —— 两者名字一模一样，只有单位能分开。
+ * 只在**同分**时生效，不影响 L1–L3 的层级优先关系。
  * 无命中返回 null → unmatched flagged（交由自学习/人工复核）。
  */
 export function matchMetric(
   analyte: string,
-  metricDefinitions: MetricDefinition[]
+  metricDefinitions: MetricDefinition[],
+  obsUnit?: string | null
 ): MetricDefinition | null {
   const lowerAnalyte = analyte.toLowerCase().trim();
   const cleaned = cleanForMatch(analyte);
   if (cleaned.length === 0) return null;
+  const canonObsUnit = canonicalUnit(obsUnit ?? null);
 
   let best: MetricDefinition | null = null;
   let bestScore = 0;
+  let bestUnitHit = false;
 
   for (const def of metricDefinitions) {
     const score = scoreDefinition(def, lowerAnalyte, cleaned);
     if (score <= 0) continue;
-    if (score > bestScore || (score === bestScore && (best === null || def.id < best.id))) {
+    const unitHit =
+      canonObsUnit !== null && declaredUnits(def).includes(canonObsUnit);
+    const better =
+      score > bestScore ||
+      (score === bestScore &&
+        ((unitHit && !bestUnitHit) ||
+          (unitHit === bestUnitHit && (best === null || def.id < best.id))));
+    if (better) {
       best = def;
       bestScore = score;
+      bestUnitHit = unitHit;
     }
   }
 
@@ -230,7 +333,13 @@ export function resolveReferenceRange(
     const learned = metric.demographicRanges
       .filter(
         (r) =>
-          r.unit != null && obsUnit != null && canonicalUnit(r.unit) === obsUnit,
+          r.unit != null &&
+          obsUnit != null &&
+          canonicalUnit(r.unit) === obsUnit &&
+          // 学习行若标了性别，只能用于同性别档案（否则男性报告会套用女性区间）
+          (r.sex == null ||
+            demographics?.sex == null ||
+            r.sex === demographics.sex),
       )
       .sort((a, b) => (a.rangeLow ?? -Infinity) - (b.rangeLow ?? -Infinity));
     if (learned.length > 0) {
@@ -279,7 +388,7 @@ export function normalizeExtractions(
   const flagged: FlaggedExtraction[] = [];
 
   for (const extraction of extractions) {
-    const metric = matchMetric(extraction.analyte, metricDefinitions);
+    const metric = matchMetric(extraction.analyte, metricDefinitions, extraction.unit);
 
     if (!metric) {
       flagged.push({
