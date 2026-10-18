@@ -9,9 +9,11 @@ import {
   Table2,
   LayoutList,
   LayoutGrid,
+  Ruler,
 } from "lucide-react";
 import { DashboardScreen } from "./dashboard-screen";
 import { ChangeTopN } from "@/components/health/change-topn";
+import { DumbbellCompare } from "@/components/compare/dumbbell-compare";
 // spec 20 §3.3：类型与批次视图抽离到共享组件（就诊枢纽卡对比弹窗复用），
 // 此处 re-export 保持 `from "./page"` 既有引用兼容（dashboard-screen 等）。
 export type { CompareMetricRow, CompareBatch } from "@/components/compare/types";
@@ -31,14 +33,20 @@ function ComparePageInner() {
   const { data, isLoading } = trpc.observations.compareBatches.useQuery();
   const batches = data?.batches;
 
-  // 三视图（spec 17 §1）：批次对比（默认）| 历年总表 | 健康大屏
-  // 支持 /compare?tab=dashboard|table 深链（健康报告页入口跳转用）
-  const initialView = searchParams.get("tab") === "dashboard"
-    ? "dashboard"
-    : searchParams.get("tab") === "table"
-      ? "table"
-      : "blocks";
-  const [view, setView] = useState<"blocks" | "table" | "dashboard">(initialView);
+  // 四视图（spec 17 §1）：批次对比（默认）| 历年总表 | 位置对比 | 健康大屏
+  // 支持 /compare?tab=dashboard|table|dumbbell 深链（健康报告页入口跳转用）
+  const tab = searchParams.get("tab");
+  const initialView =
+    tab === "dashboard"
+      ? "dashboard"
+      : tab === "table"
+        ? "table"
+        : tab === "dumbbell"
+          ? "dumbbell"
+          : "blocks";
+  const [view, setView] = useState<
+    "blocks" | "table" | "dashboard" | "dumbbell"
+  >(initialView);
   // null = 用户尚未定制 → 默认展开最新一次（派生状态，不用 effect）
   const [customExpanded, setCustomExpanded] = useState<Set<number> | null>(null);
   const expanded = useMemo(
@@ -134,6 +142,20 @@ function ComparePageInner() {
               指标总表
             </button>
           )}
+          {batches.length > 1 && (
+            <button
+              onClick={() => setView("dumbbell")}
+              className={cn(
+                "flex h-[30px] items-center gap-1.5 px-3 font-mono text-[11px] font-medium uppercase tracking-[0.04em] transition-colors",
+                view === "dumbbell"
+                  ? "bg-white text-accent-600 shadow-xs"
+                  : "text-neutral-500 hover:text-neutral-900",
+              )}
+            >
+              <Ruler className="size-3.5" />
+              位置对比
+            </button>
+          )}
           <button
             onClick={() => setView("dashboard")}
             className={cn(
@@ -173,6 +195,16 @@ function ComparePageInner() {
         </div>
       ) : view === "table" ? (
         <BatchTable batches={batches} />
+      ) : view === "dumbbell" ? (
+        <div className="space-y-4">
+          {batches[0] && (
+            <DumbbellCompare
+              metrics={batches[0].metrics}
+              curDate={batches[0].date}
+              prevDate={batches[1]?.date ?? null}
+            />
+          )}
+        </div>
       ) : (
         <DashboardScreen batches={batches} />
       )}

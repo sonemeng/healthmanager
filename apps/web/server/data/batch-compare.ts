@@ -107,6 +107,8 @@ export interface BatchMetricRow {
   prevValue: number | null;
   prevUnit: string | null;
   prevValueText: string | null;
+  /** 上次检查时该指标是否异常（入库时按当次报告区间判定）；用于「状态翻转」识别 */
+  prevIsAbnormal: boolean | null;
   delta: number | null;
   deltaPercent: number | null;
   direction: 'up' | 'down' | 'flat' | null;
@@ -182,6 +184,18 @@ function buildConvLookup(conversions: ConversionRow[]) {
   };
 }
 
+// 单位写法差异（μ / µ / u、大小写、空格）不代表单位不同。
+// 化验单里「μmol/L」与「umol/L」并存是常态，若按字面比较会被误判成不可比，
+// 实测会让尿肌酐、总胆红素等 5 项直接退出对比。
+function normalizeUnit(unit: string | null): string | null {
+  if (unit == null) return null;
+  return unit.replace(/[μµ]/g, 'u').replace(/\s+/g, '').toLowerCase();
+}
+
+function sameUnit(a: string | null, b: string | null): boolean {
+  return normalizeUnit(a) === normalizeUnit(b);
+}
+
 // 两批次对齐：cur vs prev 的全量对比（presence/delta/单位换算口径与趋势对比页一致）。
 // curMap/prevMap 为 groupRowsByDay 的单日 map；prevMap 为 null 时全部视为「新增」。
 export function compareTwoDays(
@@ -221,10 +235,10 @@ export function compareTwoDays(
       const prevUnit = prevRow.unit ?? null;
       const dictUnit = dictRow.dictUnit ?? null;
 
-      if (curUnit !== prevUnit) {
+      if (!sameUnit(curUnit, prevUnit)) {
         // 单位不一致：双方换算到字典基准单位再比；无规则 → 单位不可比
         const toBase = (v: number, u: string | null): number | null => {
-          if (u === dictUnit) return v;
+          if (sameUnit(u, dictUnit)) return v;
           if (!u || !dictUnit) return null;
           const conv = findConversion(u, dictUnit, code);
           if (!conv) return null;
@@ -265,6 +279,7 @@ export function compareTwoDays(
       prevValue: prevRow?.valueNumeric ?? null,
       prevUnit: prevRow?.unit ?? null,
       prevValueText: prevRow?.valueText ?? null,
+      prevIsAbnormal: prevRow?.isAbnormal ?? null,
       delta,
       deltaPercent,
       direction,
@@ -284,11 +299,22 @@ export function compareTwoDays(
 }
 
 // 批次按日期倒序（最新在前），每次 vs 紧邻上一次（趋势对比页既有口径）
+//
+// 孤立记录不能当「一次检查」：某天只测了一项（例如单独复查血糖）若参与对比链，
+// 会把最新一次检查的基准截断成这条记录 —— 实测用户库 2026-07-24 只有一条 glucose，
+// 导致 2026-10-03 的 68 项全部失去基准。因此对比链跳过指标数少于此阈值的天。
+// 过滤后不足两批时回退全量，避免零星记录的用户看到空页。
+const MIN_BATCH_METRICS = 2;
+
 export function buildBatches(
   days: Map<string, Map<string, BatchRow>>,
   conversions: ConversionRow[],
 ): Batch[] {
-  const dateKeys = Array.from(days.keys()).sort(); // 升序（旧 → 新）
+  const allKeys = Array.from(days.keys()).sort(); // 升序（旧 → 新）
+  const denseKeys = allKeys.filter(
+    (key) => (days.get(key)?.size ?? 0) >= MIN_BATCH_METRICS,
+  );
+  const dateKeys = denseKeys.length >= 2 ? denseKeys : allKeys;
 
   const batches = [];
   for (let i = dateKeys.length - 1; i >= 0; i--) {

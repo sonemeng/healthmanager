@@ -17,6 +17,7 @@ export type CompareMetricRow = {
   prevValue: number | null;
   prevUnit: string | null;
   prevValueText: string | null;
+  prevIsAbnormal: boolean | null;
   delta: number | null;
   deltaPercent: number | null;
   direction: "up" | "down" | "flat" | null;
