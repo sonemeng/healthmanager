@@ -1,4 +1,5 @@
 import type { DataCategory, DocumentType } from '@openvitals/common';
+import type { GateCode } from './units';
 
 export interface RawExtraction {
   analyte: string;
@@ -55,6 +56,13 @@ export interface NormalizedObservation {
    * → 区间已置空。落 observations.metadata_json，供事后审计「这条为什么没有区间」。
    */
   gateReason?: string;
+  /**
+   * 门禁结论结构化码（spec 21 §4.2）：
+   * `unit_mismatch` / `band_mismatch` = 阻断 → 落库状态 `range_pending`；
+   * `unit_missing` / `dict_unit_missing` = 提示 → 只留痕不阻断。
+   * 定性/无量纲/报告自带区间的行不会有值（未做门禁判定）。
+   */
+  gateCode?: GateCode;
 }
 
 export interface FlaggedExtraction {

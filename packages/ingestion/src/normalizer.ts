@@ -1,6 +1,7 @@
 import type { RawExtraction, NormalizedObservation, FlaggedExtraction, NormalizationResult } from './types';
 import { CONFIDENCE_THRESHOLD } from '@openvitals/common';
 import { checkUnitConsistency, checkMagnitudeBand, canonicalUnit } from './units';
+import type { GateCode } from './units';
 
 export interface DemographicRange {
   sex: string | null;
@@ -39,6 +40,12 @@ export interface MetricDefinition {
   referenceRangeHigh: number | null;
   /** spec 21（S0a）：字典条目自身的来源等级（从其区间行继承最高等级） */
   sourceTier?: string | null;
+  /**
+   * spec 21（S0a）：单位性质分类（migration 0024）。
+   * `dimensionless`（尿比重/尿 pH/比值类）与 `qualitative`（定性/半定量）
+   * 本来就"没有单位"或"没有数值"，不能拿"观测缺单位"去拦（§4.1 豁免的判据之一）。
+   */
+  unitKind?: string | null;
   demographicRanges?: DemographicRange[];
 }
 
@@ -331,11 +338,15 @@ export interface ResolvedRange {
   high: number | null;
   /** 是否被区间对应性门禁拦下（仅 fallback 路径可能为 true） */
   gated?: boolean;
+  /** 结构化结论码（spec 21 §4.2）：阻断类才落 range_pending */
+  gateCode?: GateCode;
   gateReason?: string;
   /** 实际采用的来源等级（spec 21 · S0b 诊断用） */
   sourceTier?: string;
   /** 同等级多来源区间冲突，已回落或放弃自动择一 */
   conflicted?: boolean;
+  /** spec 21 §4.1：本条按「定性/无量纲/文献无区间」豁免，未做门禁判定 */
+  exempted?: boolean;
 }
 
 /**
@@ -366,6 +377,19 @@ export function resolveReferenceRange(
       low: extraction.referenceRangeLow,
       high: extraction.referenceRangeHigh,
     };
+  }
+
+  // ── 门禁作用域（spec 21 §4.1 / D2）：定性项不进门禁 ────────────────────────
+  // 判据是「没有数值」而不是「属于尿检」：
+  //  - value === null（纯定性/半定量，如 尿蛋白 1+、隐血 阴性）
+  //  - unit_kind = 'qualitative'（字典已标注定性，即使将来解析出数值也不判区间）
+  // 这类条目没有数值可比，解析区间与门禁都没有意义 → 不解析 fallback、不门禁，
+  // isAbnormal 只取报告自身的 ↑/↓ 标记（refLow/refHigh 为 null 时自动回落）。
+  // 实测：23 条空区间里 20 条是这类；一并拦会让一份尿常规刷出 20 条零信息量待办。
+  // 反例必须记住：尿肌酐 5922.2 µmol/L、尿沉渣红细胞 0~3/HPF 是尿检里的**定量**项，
+  // value 非 null → 照常门禁。
+  if (extraction.value === null || metric.unitKind === 'qualitative') {
+    return { low: null, high: null, exempted: true };
   }
 
   interface Candidate {
@@ -408,16 +432,26 @@ export function resolveReferenceRange(
       : null;
 
   let baseGateReason: string | null = null;
+  let baseGateCode: GateCode | null = null;
   if (base) {
-    // (1) 单位一致性：fallback 数值是在字典单位下写的，观测单位必须一致
-    const unitGate = checkUnitConsistency(extraction.unit, metric.unit, metric.id);
+    // 无量纲指标（尿比重 / 尿 pH / 白球比 / 负荷评分）：字典本就不声明单位，
+    // 「观测也没有单位」不是不一致，跳过单位门禁（§4.1 判据扩展，实测 4 条）。
+    // 量级带仍照常判定——那是数值本身的自证，与单位写法无关。
+    // 只豁免「两边都没单位」这一种；无量纲指标却带着 mg/dL 进来，仍按不一致处理。
+    const dimensionlessNoUnit =
+      metric.unitKind === 'dimensionless' && canonicalUnit(extraction.unit) === null;
+    const unitGate = dimensionlessNoUnit
+      ? ({ ok: true } as const)
+      : checkUnitConsistency(extraction.unit, metric.unit, metric.id);
     if (!unitGate.ok) {
       baseGateReason = unitGate.reason ?? '观测单位与字典单位不一致';
+      baseGateCode = unitGate.code ?? null;
     } else {
       // (2) §6.1 数值量级带：单位相同但量级仍旧不对（正交第二道网）
       const bandGate = checkMagnitudeBand(metric.id, extraction.unit, base.low, base.high);
       if (!bandGate.ok) {
         baseGateReason = bandGate.reason ?? 'fallback 区间量级与观测值不符';
+        baseGateCode = bandGate.code ?? null;
       } else {
         candidates.push(base);
       }
@@ -427,7 +461,13 @@ export function resolveReferenceRange(
   // 无任何候选：区分「本来无区间」与「有区间但被门禁拦下」
   if (candidates.length === 0) {
     if (baseGateReason !== null) {
-      return { low: null, high: null, gated: true, gateReason: baseGateReason };
+      return {
+        low: null,
+        high: null,
+        gated: true,
+        gateCode: baseGateCode ?? undefined,
+        gateReason: baseGateReason,
+      };
     }
     return { low: null, high: null };
   }
@@ -552,6 +592,8 @@ export function normalizeExtractions(
       interopMark: extraction.interopMark,
       // 门禁留痕（R2）：被拦下时记录原因，落 metadata_json 供事后审计
       gateReason: range.gateReason,
+      // 结构化门禁码（spec 21 §4.2）：materialize 据此决定 status
+      gateCode: range.gateCode,
     };
 
     if (baseConfidence < CONFIDENCE_THRESHOLD) {

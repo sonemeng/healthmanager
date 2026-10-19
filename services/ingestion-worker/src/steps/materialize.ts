@@ -23,6 +23,14 @@ export async function materialize(
   const profileId = jobRow?.profileId ?? null;
 
   if (normalized.length > 0) {
+    // 阻断类门禁（spec 21 §4.2）：区间已置空且无可信区间可用 → 该行落 range_pending，
+    // 任务进 review_needed，等人工补区间/确认无区间。
+    // 提示类（unit_missing / dict_unit_missing）只留痕，不阻断任务（D1 口径：
+    // 用户对"没单位"没有可执行动作，拦了只会训练出"见待办就点确认"）。
+    const BLOCKING_GATE_CODES = new Set(['unit_mismatch', 'band_mismatch']);
+    const isBlocking = (code?: string | null): boolean =>
+      code != null && BLOCKING_GATE_CODES.has(code);
+
     // Batch insert observations
     const rows = normalized.map((obs) => ({
       userId: ctx.userId,
@@ -36,7 +44,10 @@ export async function materialize(
       referenceRangeHigh: obs.referenceRangeHigh,
       referenceRangeText: obs.referenceRangeText,
       isAbnormal: obs.isAbnormal,
-      status: 'extracted' as const,
+      // 状态分级（spec 21 §4.3）：阻断 → range_pending；其余仍为 extracted（待确认）
+      status: (isBlocking(obs.gateCode) ? 'range_pending' : 'extracted') as
+        | 'range_pending'
+        | 'extracted',
       confidenceScore: obs.confidenceScore,
       observedAt: obs.observedAt,
       observedAtIsFallback: obs.observedAtIsFallback ?? false,
@@ -44,13 +55,14 @@ export async function materialize(
       importJobId: ctx.importJobId,
       // AI 识别的原始项目名，界面显示优先用它
       originalValueText: obs.analyte ?? null,
-      // 溯源属性：括号剥离内容 / 互认标识 / 区间门禁留痕（C9 + R2）。均为空则不写列
+      // 溯源属性：括号剥离内容 / 互认标识 / 区间门禁留痕（C9 + R2 + spec 21）。均为空则不写列
       metadataJson:
         obs.analyteNote || obs.interopMark || obs.gateReason
           ? {
               ...(obs.analyteNote ? { analyteNote: obs.analyteNote } : {}),
               ...(obs.interopMark ? { interopMark: obs.interopMark } : {}),
               ...(obs.gateReason ? { gateReason: obs.gateReason } : {}),
+              ...(obs.gateCode ? { gateCode: obs.gateCode } : {}),
             }
           : null,
     }));
@@ -108,10 +120,15 @@ export async function materialize(
   }
 
   // Determine final status（flagged 不计入 extractionCount）
-  // 注意：仅 'range_unit_mismatch' 不触发 review —— 该行已按 matched 指标正常落库，
-  // 只是区间留空（值为 null 方向待确认），不构成必须人工介入的阻断项。
+  // spec 21 §4.3：阻断类门禁（区间置空 + 待人工给区间）属于**必须**处理的待办 →
+  // 计入 needsReview，否则任务会以 completed 收尾，待办无人看见。
+  // 提示类（unit_missing / dict_unit_missing）不阻断（D1 拍板）。
   const gatedCount = flagged.filter((f) => f.reason === 'range_unit_mismatch').length;
-  const needsReview = flaggedForInsert.length > 0 || options.forceReview === true;
+  const gatedBlockingCount = normalized.filter(
+    (obs) => obs.gateCode === 'unit_mismatch' || obs.gateCode === 'band_mismatch',
+  ).length;
+  const needsReview =
+    flaggedForInsert.length > 0 || gatedBlockingCount > 0 || options.forceReview === true;
   const finalStatus = needsReview ? 'review_needed' : 'completed';
 
   await db.update(importJobs)
@@ -135,6 +152,7 @@ export async function materialize(
 
   console.log(
     `[materialize] Inserted ${normalized.length} observations, ` +
-    `${flaggedForInsert.length} flagged, ${gatedCount} range-gated (区间置空). Status: ${finalStatus}`
+    `${flaggedForInsert.length} flagged, ${gatedCount} range-gated ` +
+    `(${gatedBlockingCount} blocking → range_pending). Status: ${finalStatus}`
   );
 }

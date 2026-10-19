@@ -203,6 +203,7 @@ async function main() {
     referenceRangeLow: m.referenceRangeLow,
     referenceRangeHigh: m.referenceRangeHigh,
     sourceTier: m.sourceTier ?? null,
+    unitKind: m.unitKind ?? null,
     demographicRanges: rangesByMetric.get(m.id),
   }));
   const unitConvs = conversions.map((c) => ({

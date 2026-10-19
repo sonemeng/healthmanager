@@ -241,6 +241,8 @@ export async function normalize(
     referenceRangeLow: m.referenceRangeLow,
     referenceRangeHigh: m.referenceRangeHigh,
     sourceTier: m.sourceTier ?? null,
+    // spec 21（S1）：定性/无量纲判据，决定是否进门禁
+    unitKind: m.unitKind ?? null,
     demographicRanges: rangesByMetric.get(m.id),
   }));
 
@@ -275,6 +277,7 @@ export async function normalize(
       referenceRangeLow: m.referenceRangeLow,
       referenceRangeHigh: m.referenceRangeHigh,
       sourceTier: m.sourceTier ?? null,
+      unitKind: m.unitKind ?? null,
       demographicRanges: rangesByMetric.get(m.id),
     }));
     result = normalizeExtractions(extractions, defs2, unitConvs, 0.85, demographics);

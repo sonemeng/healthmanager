@@ -17,8 +17,26 @@
 import { canonicalUnit } from '@openvitals/common';
 export { canonicalUnit };
 
+/**
+ * 门禁结论结构化码（spec 21 §4.2 / D5）。
+ *
+ * `reason` 是给人看的整句中文，`code` 给机器分流：
+ *  - `unit_mismatch` / `band_mismatch` → **阻断**：落 `range_pending`，任务进 review_needed
+ *  - `unit_missing` / `dict_unit_missing` → **提示**：只打徽标，不阻断任务完成
+ *
+ * 为什么必须结构化：UI 要按严重度决定「进待办」还是「只提示」，
+ * 自由文本做不到可靠判定（`reason` 里既有"缺失"也有"不一致"，字符串匹配迟早出错）。
+ */
+export type GateCode =
+  | 'unit_mismatch'
+  | 'band_mismatch'
+  | 'unit_missing'
+  | 'dict_unit_missing';
+
 export interface GateResult {
   ok: boolean;
+  /** 结构化结论码；ok=true 时不填 */
+  code?: GateCode;
   reason?: string;
 }
 
@@ -68,17 +86,25 @@ export function checkUnitConsistency(
   if (!u && !d) return { ok: true };
 
   if (!u) {
-    return { ok: false, reason: '观测单位缺失，无法确认区间对应性' };
+    return { ok: false, code: 'unit_missing', reason: '观测单位缺失，无法确认区间对应性' };
   }
   if (!d) {
-    return { ok: false, reason: `字典未声明单位，无法确认 fallback 区间（观测单位 ${u}）的对应性` };
+    return {
+      ok: false,
+      code: 'dict_unit_missing',
+      reason: `字典未声明单位，无法确认 fallback 区间（观测单位 ${u}）的对应性`,
+    };
   }
   if (u === d) return { ok: true };
 
   // R6：逐指标等价类（仅声明过的指标，如单价离子的 mEq/L ≡ mmol/L）
   if (metricId && isEquivalentUnit(metricId, u, d)) return { ok: true };
 
-  return { ok: false, reason: `观测单位 ${u} 与字典区间单位 ${d} 不一致，fallback 区间数值量级不可用` };
+  return {
+    ok: false,
+    code: 'unit_mismatch',
+    reason: `观测单位 ${u} 与字典区间单位 ${d} 不一致，fallback 区间数值量级不可用`,
+  };
 }
 
 /**
@@ -187,6 +213,7 @@ export function checkMagnitudeBand(
   if (mid < band.low || mid > band.high) {
     return {
       ok: false,
+      code: 'band_mismatch',
       reason: `区间 ${lo}~${hi}（中点 ${mid}）落在 ${metricId}@${cu} 量级带 ${band.low}~${band.high} 之外`,
     };
   }
