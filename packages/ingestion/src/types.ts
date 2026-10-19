@@ -74,8 +74,9 @@ export interface NormalizedObservation {
   /**
    * 门禁结论结构化码（spec 21 §4.2）：
    * `unit_mismatch` / `band_mismatch` = 阻断 → 落库状态 `range_pending`；
-   * `unit_missing` / `dict_unit_missing` = 提示 → 只留痕不阻断。
-   * 定性/无量纲/报告自带区间的行不会有值（未做门禁判定）。
+   * `unit_missing` / `dict_unit_missing` = 提示 → 只留痕不阻断；
+   * `range_unverified` = 提示（S5.4）→ 区间可用、不阻断，但按 D7 排除自动通过。
+   * 定性/半定量/无量纲/报告自带区间的行不会有值（未做门禁判定）。
    */
   gateCode?: GateCode;
   /**

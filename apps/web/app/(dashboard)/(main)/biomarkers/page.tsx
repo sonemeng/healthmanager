@@ -1,11 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { trpc } from "@/lib/trpc/client";
 import { cn } from "@/lib/utils";
 import { TitleActionHeader } from "@/components/title-action-header";
 import { AnimatedEmptyState } from "@/components/animated-empty-state";
 import { StatusBadge } from "@/components/health/status-badge";
+import { RangeSourceBadge } from "@/components/health/range-source-badge";
+import { ClaimCitationModal } from "@/components/health/claim-citation-modal";
+import { useModal } from "@/components/modal/provider";
 import { CategoryNav, type CategoryNavItem } from "@/components/category-nav";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/biomarker-categories";
 import {
@@ -17,6 +21,7 @@ import {
   Beaker,
   FlaskConical,
   Microscope,
+  CheckCheck,
 } from "lucide-react";
 import { StyledIcon } from "@/components/styled-icon";
 
@@ -55,6 +60,24 @@ const TIER_RANK: Record<string, number> = {
   unverified: 5,
 };
 
+/**
+ * 「来源待补」判据（spec 21 §15.6 N7 / §15.7 S5.1 R8）：三条件**联合**。
+ *
+ * 只看 `citation` 空会把 47 条 `auto_*` 字典条目 + 92 条学习行（它们的可追溯性靠
+ * `observation_id`）一起拖进待办；只看 `tier` 则 30 条归位（exempt）后仍天天报。
+ * 必须与 `audit-metric-dictionary.ts` 的 `isClaimPending()` 完全一致，
+ * 否则页面计数与校验器数字对不上（§15.6 N4：数字只能由机制产出）。
+ */
+function isClaimPending(row: {
+  sourceTier?: string | null;
+  citation?: string | null;
+  citationKind?: string | null;
+}): boolean {
+  return (
+    row.sourceTier === 'unverified' && !row.citation && !row.citationKind
+  );
+}
+
 type RangeRow = {
   id?: number | null;
   sex: string | null;
@@ -65,6 +88,9 @@ type RangeRow = {
   unit: string | null;
   sourceTier?: string | null;
   source?: string | null;
+  citation?: string | null;
+  citationKind?: string | null;
+  verifiedAt?: Date | string | null;
 };
 
 /**
@@ -101,16 +127,44 @@ function pickBestSexRanges(ranges: RangeRow[]): Array<[string, RangeRow]> {
   return ordered.map((s) => [s, bySex.get(s)!]);
 }
 
-// 来源分组（spec 19 §3.4 + 2026-10-12 用户拍板）：// 国标 → 指南/平台 → 通行口径 → 检验互认标识（如陕HR，来源列显示标识本身）→ 检验科区间
-function sourceGroup(source: string | null): { order: number; label: string } {
+// 来源分组（spec 19 §3.4 + 2026-10-12 用户拍板 + spec 21 §15.5.3 / N2 改为读 source_tier）。
+//
+// 旧实现按 `source` 字符串猜等级，兜底一律 `{ order: 1, label: "指南/平台口径" }`：
+// 把「镜检法通行（教材）」「流式仪器法通行（仪器）」「中国医药信息查询平台（商业网站）」
+// 三种完全不同的等级全盖成「指南级」，还因 order:1 排在「通行口径」（order 2）之前——
+// 「网站 ≥ 指南」的升格从字符串分支里长出来。
+//
+// 新实现**优先读 `source_tier`**（数据已有），`source` 只用于展示原文；
+// unverified 单列一档「来源待补」。这样等级由数据决定，不再靠字符串猜。
+function sourceGroup(
+  source: string | null,
+  tier?: string | null,
+): { order: number; label: string } {
+  switch (tier) {
+    case 'national_standard':
+      return { order: 0, label: "国家标准" };
+    case 'guideline':
+      return { order: 1, label: "指南" };
+    case 'textbook':
+      return { order: 2, label: "教材" };
+    case 'instrument':
+      // 检验结果互认标识（陕HR/晋HR…）也归此档：来源列显示标识本身
+      return { order: 3, label: source && /HR$/.test(source) ? "检验结果互认（报告单标识）" : "仪器/方法通行口径" };
+    case 'lab_learned':
+      return { order: 4, label: "检验科区间（报告单学习）" };
+    case 'user_input':
+      return { order: 5, label: "手工补录" };
+    case 'unverified':
+      return { order: 9, label: "来源待补" };
+  }
+  // 无 tier 的历史数据：退回按 source 字符串的粗略归类（兜底不再升格为「指南」）
   if (source?.startsWith("WS/T")) return { order: 0, label: "国家标准" };
-  if (source === "通行口径") return { order: 2, label: "通行口径" };
+  if (source === "通行口径") return { order: 2, label: "教材" };
   if (source === "检验科区间")
     return { order: 4, label: "检验科区间（报告单学习）" };
-  // 各省检验结果互认标识以「HR」结尾（陕HR/晋HR/京HR…）——行来源列直接显示标识
   if (source && /HR$/.test(source))
     return { order: 3, label: "检验结果互认（报告单标识）" };
-  return { order: 1, label: "指南/平台口径" };
+  return { order: 8, label: "其他" };
 }
 
 // 方法依赖项（spec 19 附录 ➖ 类）：无通行国标、检验系统各不相同——统一标「以报告单为准」
@@ -125,6 +179,21 @@ const METHOD_DEPENDENT = new Set([
 const CYCLE_PHASE_METRICS = new Set(["fsh", "lh", "estradiol", "progesterone"]);
 
 export default function BiomarkersPage() {
+  // useSearchParams 需要 Suspense 边界（Next App Router 构建要求，compare 页同款）
+  return (
+    <Suspense fallback={null}>
+      <BiomarkersPageInner />
+    </Suspense>
+  );
+}
+
+function BiomarkersPageInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const modal = useModal();
+  // 来源待补筛选视图（spec 21 §15.7 S5.2）：深链 ?claim=unverified
+  const claimMode = searchParams.get("claim") === "unverified";
   const { data: metrics, isLoading: metricsLoading } =
     trpc.metrics.list.useQuery();
   const { data: ranges, isLoading: rangesLoading } =
@@ -147,6 +216,27 @@ export default function BiomarkersPage() {
   const allMetrics = metrics ?? [];
   const allRanges = ranges ?? [];
 
+  // 来源待补清单（spec 21 §15.7 S5.2）：页面计数与校验器 R8 必须同源同判据。
+  // 字典条目与区间行分开计——前者点「已核对」写 metric_definitions，
+  // 后者写 reference_ranges，两条链路不能混。
+  const pendingMetrics = useMemo(
+    () => allMetrics.filter((m) => isClaimPending(m)),
+    [allMetrics],
+  );
+  const pendingRanges = useMemo(
+    () => allRanges.filter((r) => isClaimPending(r)),
+    [allRanges],
+  );
+  const pendingRangeCount = pendingRanges.length;
+  const pendingTotal = pendingMetrics.length + pendingRangeCount;
+
+  // 有区间待补的指标集合：筛选视图里要连这些指标一起列出来，
+  // 否则「4 条区间待补」在页面上无处可点（区间行藏在展开面板里）。
+  const pendingRangeMetricCodes = useMemo(
+    () => new Set(pendingRanges.map((r) => r.metricCode)),
+    [pendingRanges],
+  );
+
   // Group ranges by metric code
   const rangesByMetric = useMemo(() => {
     const map = new Map<string, typeof allRanges>();
@@ -158,17 +248,22 @@ export default function BiomarkersPage() {
     return map;
   }, [allRanges]);
 
-  // Filter by search
+  // Filter by search（先套 claim 视图，再套关键词；两者可叠加）
   const lower = search.toLowerCase().trim();
-  const filtered = lower
+  const claimScoped = claimMode
     ? allMetrics.filter(
+        (m) => isClaimPending(m) || pendingRangeMetricCodes.has(m.id),
+      )
+    : allMetrics;
+  const filtered = lower
+    ? claimScoped.filter(
         (m) =>
           m.name.toLowerCase().includes(lower) ||
           m.id.toLowerCase().includes(lower) ||
           m.category.toLowerCase().includes(lower) ||
           m.aliases.some((a: string) => a.toLowerCase().includes(lower)),
       )
-    : allMetrics;
+    : claimScoped;
 
   // 按分类分组
   const byCategory = useMemo(() => {
@@ -309,24 +404,73 @@ export default function BiomarkersPage() {
     <div>
       <TitleActionHeader title="生物标志物" subtitle={subtitle} />
 
-      {/* Search */}
-      <div className="relative mt-7 mb-6 max-w-md">
-        <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-neutral-400" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="搜索指标、别名或分类…"
-          className="w-full rounded-lg border border-neutral-200 bg-white py-2.5 pl-10 pr-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100 transition-all"
-        />
+      {/* Search + 来源待补筛选（spec 21 §15.7 S5.2） */}
+      <div className="mt-7 mb-6 flex flex-wrap items-center gap-3">
+        <div className="relative w-full max-w-md">
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-neutral-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="搜索指标、别名或分类…"
+            className="w-full rounded-lg border border-neutral-200 bg-white py-2.5 pl-10 pr-3 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-accent-300 focus:outline-none focus:ring-2 focus:ring-accent-100 transition-all"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            const next = new URLSearchParams(searchParams.toString());
+            if (claimMode) next.delete("claim");
+            else next.set("claim", "unverified");
+            const qs = next.toString();
+            router.replace(qs ? `${pathname}?${qs}` : pathname);
+          }}
+          title="只看来源待补的指标与区间"
+          className={cn(
+            "inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2.5 text-[12px] font-medium font-body transition-all",
+            claimMode
+              ? "border-amber-300 bg-amber-50 text-amber-700"
+              : pendingTotal > 0
+                ? "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:text-neutral-900"
+                : "border-neutral-200 bg-white text-neutral-400",
+          )}
+        >
+          <CheckCheck className="size-3.5" />
+          来源待补 {pendingTotal}
+        </button>
       </div>
 
+      {claimMode && (
+        <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3">
+          <div className="text-[13px] font-medium text-amber-800 font-body">
+            来源待补 {pendingTotal} 项（字典 {pendingMetrics.length} · 区间{" "}
+            {pendingRangeCount}）
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-amber-700/90 font-body">
+            逐条点「已核对」补一句依据即可——保存后初审不再报它，这个数字会自己变小。
+            区间行在展开面板里，可直接核对。
+          </p>
+        </div>
+      )}
+
       {filtered.length === 0 ? (
-        <AnimatedEmptyState
-          title="没有找到相关结果"
-          description={`No metrics matching "${search}". 换个关键词试试 term.`}
-          cardIcon={({ index }) => emptyIcons[index % emptyIcons.length]!}
-        />
+        claimMode && pendingTotal === 0 ? (
+          <AnimatedEmptyState
+            title="来源已全部核对"
+            description="当前没有「来源待补」的指标或区间。新导入的数据若带来未核验来源，会自动出现在这里。"
+            cardIcon={({ index }) => emptyIcons[index % emptyIcons.length]!}
+          />
+        ) : (
+          <AnimatedEmptyState
+            title="没有找到相关结果"
+            description={
+              search
+                ? `没有与「${search}」匹配的指标，换个关键词试试。`
+                : "当前筛选条件下没有条目。"
+            }
+            cardIcon={({ index }) => emptyIcons[index % emptyIcons.length]!}
+          />
+        )
       ) : (
         <>
           {/* Mobile pill nav */}
@@ -421,8 +565,8 @@ export default function BiomarkersPage() {
                         {catMetrics.map((m) => {
                           const metricRanges = [...(rangesByMetric.get(m.id) ?? [])]
                             .sort((a, b) => {
-                              const ga = sourceGroup(a.source);
-                              const gb = sourceGroup(b.source);
+                              const ga = sourceGroup(a.source, a.sourceTier);
+                              const gb = sourceGroup(b.source, b.sourceTier);
                               if (ga.order !== gb.order) return ga.order - gb.order;
                               return (a.id ?? 0) - (b.id ?? 0);
                             });
@@ -433,6 +577,18 @@ export default function BiomarkersPage() {
                             m.aliases.length > 4 ? m.aliases.length - 4 : 0;
                           const isMethodDependent = METHOD_DEPENDENT.has(m.id);
                           const isCyclePhase = CYCLE_PHASE_METRICS.has(m.id);
+                          // 该指标「最高等级区间」的来源徽标（spec 21 §15.5.2）：
+                          // 有区间行 → 取排序后第一条（sourceGroup 升序 = 等级最高）的 tier；
+                          // 无区间行 → 用字典条目自身的 tier（无行时无行级 citation，看字典的）。
+                          // 待补判据（三条件联合）：tier=unverified 且无 citationKind。
+                          const bestRange = metricRanges[0];
+                          const badgeTier = (bestRange?.sourceTier ?? m.sourceTier ?? null) as string | null;
+                          const badgeCitationKind =
+                            bestRange
+                              ? (bestRange.citationKind ?? null)
+                              : (m.citationKind ?? null);
+                          const badgeCitation = bestRange ? (bestRange.citation ?? null) : (m.citation ?? null);
+                          const badgeVerifiedAt = bestRange ? (bestRange.verifiedAt ?? null) : (m.verifiedAt ?? null);
 
                           return (
                             <div key={m.id}>
@@ -446,7 +602,7 @@ export default function BiomarkersPage() {
                               >
                                 {/* Name + description */}
                                 <div>
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex flex-wrap items-center gap-2">
                                     <span className="text-sm font-medium text-neutral-900 font-body">
                                       {m.name}
                                     </span>
@@ -465,6 +621,26 @@ export default function BiomarkersPage() {
                                       <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[10px] text-neutral-500">
                                         月经周期分期
                                       </span>
+                                    )}
+                                    {claimMode && isClaimPending(m) && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          modal.show(
+                                            <ClaimCitationModal
+                                              target="metric"
+                                              id={m.id}
+                                              name={m.name}
+                                              metricCode={m.id}
+                                            />,
+                                          );
+                                        }}
+                                        className="inline-flex cursor-pointer items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 transition-colors hover:bg-amber-100"
+                                      >
+                                        <CheckCheck className="size-3" />
+                                        已核对
+                                      </button>
                                     )}
                                   </div>
                                   {m.description && (
@@ -508,6 +684,20 @@ export default function BiomarkersPage() {
                                       </span>
                                     );
                                   })()}
+                                  {/* 来源徽标（spec 21 §15.5.2）：该指标最高等级区间的来源状态 */}
+                                  <div className="mt-0.5">
+                                    <RangeSourceBadge
+                                      tier={badgeTier}
+                                      citationKind={
+                                        badgeCitationKind === "cited" || badgeCitationKind === "exempt"
+                                          ? badgeCitationKind
+                                          : null
+                                      }
+                                      citation={badgeCitation}
+                                      source={bestRange?.source ?? null}
+                                      verifiedAt={badgeVerifiedAt}
+                                    />
+                                  </div>
                                 </div>
 
                                 {/* 别名 */}
@@ -592,10 +782,10 @@ export default function BiomarkersPage() {
                                             (r.sex === null ||
                                               r.sex === userSex);
                                           // 分组头（spec 19 §3.4）：组切换时插一行来源组标题
-                                          const group = sourceGroup(r.source);
+                                          const group = sourceGroup(r.source, r.sourceTier);
                                           const prevGroup =
                                             idx > 0
-                                              ? sourceGroup(metricRanges[idx - 1]!.source)
+                                              ? sourceGroup(metricRanges[idx - 1]!.source, metricRanges[idx - 1]!.sourceTier)
                                               : null;
                                           const showGroupHeader =
                                             prevGroup === null || prevGroup.order !== group.order;
@@ -643,8 +833,46 @@ export default function BiomarkersPage() {
                                                     r.unit ?? m.unit,
                                                   )}
                                                 </div>
-                                                <div className="text-[11px] text-neutral-400 font-mono">
-                                                  {r.source ?? "—"}
+                                                {/* 来源 + 徽标同格（spec 21 §15.5.2）：source 是「哪家医院/哪本教材」，
+                                                    徽标是「核没核过/要不要处理」。两行必须包在同一个 grid 单元里，
+                                                    否则第 5 个直接子元素会掉到下一行第 1 列、把整表挤歪。 */}
+                                                <div className="min-w-0">
+                                                  <div className="truncate text-[11px] text-neutral-400 font-mono">
+                                                    {r.source ?? "—"}
+                                                  </div>
+                                                  <div className="mt-0.5">
+                                                    <RangeSourceBadge
+                                                      tier={r.sourceTier ?? null}
+                                                      citationKind={
+                                                        r.citationKind === 'cited' || r.citationKind === 'exempt'
+                                                          ? r.citationKind
+                                                          : null
+                                                      }
+                                                      citation={r.citation ?? null}
+                                                      source={r.source ?? null}
+                                                      verifiedAt={r.verifiedAt ?? null}
+                                                    />
+                                                  </div>
+                                                  {claimMode && isClaimPending(r) && (
+                                                    <button
+                                                      type="button"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        modal.show(
+                                                          <ClaimCitationModal
+                                                            target="range"
+                                                            id={r.id ?? ""}
+                                                            name={`${m.name} 参考区间 ${formatRange(r.rangeLow, r.rangeHigh, r.unit ?? m.unit)}`}
+                                                            metricCode={m.id}
+                                                          />,
+                                                        );
+                                                      }}
+                                                      className="mt-1 inline-flex cursor-pointer items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 transition-colors hover:bg-amber-100"
+                                                    >
+                                                      <CheckCheck className="size-3" />
+                                                      已核对
+                                                    </button>
+                                                  )}
                                                 </div>
                                               </div>
                                             </div>

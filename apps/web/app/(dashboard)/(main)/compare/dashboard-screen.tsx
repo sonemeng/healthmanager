@@ -112,6 +112,7 @@ function RecordList({
         isAbnormal: row.isAbnormal,
         refLow: row.referenceRangeLow,
         refHigh: row.referenceRangeHigh,
+        converted: !!row.converted,
       },
     ];
   });
@@ -140,7 +141,7 @@ function RecordList({
                   r.isAbnormal ? "text-[var(--color-health-warning)]" : "text-neutral-900",
                 )}
               >
-                {formatObsValue(code, r.value, r.valueText, displayPrecision)}
+                {formatObsValue(code, r.value, r.valueText, displayPrecision, { converted: r.converted })}
                 {r.unit && <span className="ml-1 text-[10px] font-normal text-neutral-400">{r.unit}</span>}
               </span>
               {change != null && (
@@ -213,9 +214,19 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
     batchesAsc
       .map((b) => {
         const row = b.metrics.find((m) => m.metricCode === code);
-        return row && row.value != null ? { date: b.date, value: row.value } : null;
+        return row && row.value != null
+          ? {
+              date: b.date,
+              value: row.value,
+              converted: !!row.converted,
+              fromUnit: row.fromUnit ?? null,
+            }
+          : null;
       })
-      .filter((p): p is { date: string; value: number } => p !== null);
+      .filter(
+        (p): p is { date: string; value: number; converted: boolean; fromUnit: string | null } =>
+          p !== null,
+      );
 
   const saveSuggested = () => {
     for (const s of suggested) addMutation.mutate({ metricCode: s.metricCode });
@@ -318,7 +329,7 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
               const healthStatus = row ? deriveStatus(row) : "normal";
               const rangeText =
                 row?.referenceRangeLow != null || row?.referenceRangeHigh != null
-                  ? `参考 ${formatRange(row.referenceRangeLow, row.referenceRangeHigh, row.unit)}`
+                  ? `参考 ${formatRange(row.referenceRangeLow, row.referenceRangeHigh, row.unit, { converted: !!row.converted })}`
                   : "无参考区间";
               const isExpanded = expandedCode === s.metricCode;
 
@@ -363,7 +374,7 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
                           )}
                           {row?.prevDate && row.prevValue != null && (
                             <>
-                              {" · "}上次 {formatObsValue(s.metricCode, row.prevValue, row.prevValueText, row.displayPrecision)}
+                              {" · "}上次 {formatObsValue(s.metricCode, row.prevValue, row.prevValueText, row.displayPrecision, { converted: !!row.prevConverted })}
                               {row.prevUnit ? ` ${row.prevUnit}` : ""}（{row.prevDate}）
                             </>
                           )}
@@ -384,7 +395,7 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
                             row?.isAbnormal ? "text-[var(--color-health-warning)]" : "text-neutral-900",
                           )}
                         >
-                          {row ? formatObsValue(s.metricCode, row.value, row.valueText, row.displayPrecision) : "—"}
+                          {row ? formatObsValue(s.metricCode, row.value, row.valueText, row.displayPrecision, { converted: !!row.converted }) : "—"}
                         </span>
                         {row?.unit && (
                           <span className="ml-1 text-[10px] font-mono text-neutral-400">
@@ -439,7 +450,13 @@ export function DashboardScreen({ batches }: { batches: CompareBatch[] }) {
                       ) : (
                         <>
                           <TrendChart
-                            data={points.map((p) => ({ date: p.date, value: p.value, unit: row?.unit ?? null }))}
+                            data={points.map((p) => ({
+                              date: p.date,
+                              value: p.value,
+                              unit: row?.unit ?? null,
+                              converted: p.converted,
+                              fromUnit: p.fromUnit,
+                            }))}
                             referenceRangeLow={row?.referenceRangeLow ?? null}
                             referenceRangeHigh={row?.referenceRangeHigh ?? null}
                             unit={row?.unit ?? null}

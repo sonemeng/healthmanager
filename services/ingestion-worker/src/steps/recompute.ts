@@ -164,7 +164,10 @@ export async function recomputeObservationRanges(
     }
 
     const meta = { ...((row.metadataJson as Record<string, unknown> | null) ?? {}) };
-    if (blocked) {
+    // gateCode 的写法必须与入库时（materialize）对称：不仅阻断类要留痕，
+    // 提示类（unit_missing / dict_unit_missing / range_unverified）同样落 metadata，
+    // 否则「重算一次」会把入库时写的提示痕迹清掉，同一行两副面孔。
+    if (range.gateCode != null) {
       meta.gateCode = range.gateCode;
       meta.gateReason = range.gateReason;
     } else {

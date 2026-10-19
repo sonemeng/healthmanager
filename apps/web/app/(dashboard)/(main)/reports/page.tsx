@@ -4,8 +4,9 @@ import { useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { trpc } from '@/lib/trpc/client';
 import { useSession } from '@/lib/auth/client';
-import { deriveStatus } from '@/lib/health-utils';
+import { deriveStatus, formatRange } from '@/lib/health-utils';
 import { formatDate, formatObsValue } from '@/lib/utils';
+import { readConversion } from '@/lib/conversion';
 import { StatusBadge, type HealthStatus } from '@/components/health/status-badge';
 import { MiniSparkline } from '@/components/health/mini-sparkline';
 import { Printer, FileText, Sparkles, Copy, Download, Utensils } from 'lucide-react';
@@ -57,6 +58,10 @@ interface MetricRow {
   observedAt: string | Date;
   sparkData: number[];
   displayPrecision: number | null;
+  /** 是否来自单位换算（spec 21 §15.7 S5.5 P1）：换算值走有效数字，否则与报告原文同精度 */
+  converted: boolean;
+  /** 换算前原始单位（如 mg/dL）；未换算为 null */
+  fromUnit: string | null;
 }
 
 interface CategoryGroup {
@@ -146,7 +151,18 @@ export default function ReportsPage() {
       encItems.length ? encItems.slice(0, 10).map((encounter) => `- ${encounter.encounterDate}｜${encounter.type.replace(/_/g, ' ')}${encounter.provider ? `｜${encounter.provider}` : ''}${encounter.chiefComplaint ? `｜${encounter.chiefComplaint}` : ''}${encounter.summary ? `\n  ${encounter.summary}` : ''}`).join('\n') : '- 无记录',
       '',
       '## 最新检验记录',
-      latest.length ? latest.map((observation) => `- ${formatDate(observation.observedAt)}｜${observation.metricCode}：${observation.valueNumeric ?? observation.valueText ?? '未记录'}${observation.unit ? ` ${observation.unit}` : ''}${observation.isAbnormal ? '（提示异常）' : ''}`).join('\n') : '- 无记录',
+      latest.length ? latest.map((observation) => {
+        // 与页面同口径（spec 21 §15.7 S5.5 P1）：换算值走有效数字，并注明换算自哪个单位
+        const conv = readConversion(observation.metadataJson);
+        const value = formatObsValue(
+          observation.metricCode,
+          observation.valueNumeric,
+          observation.valueText,
+          defMap.get(observation.metricCode)?.displayPrecision ?? null,
+          { converted: !!conv },
+        );
+        return `- ${formatDate(observation.observedAt)}｜${observation.metricCode}：${value}${observation.unit ? ` ${observation.unit}` : ''}${observation.isAbnormal ? '（提示异常）' : ''}${conv ? `（换算自 ${conv.fromUnit}）` : ''}`;
+      }).join('\n') : '- 无记录',
       '',
       '## 使用提示',
       '- 本摘要由个人健康档案自动整理，供家人、照护者或就诊时沟通使用。',
@@ -202,6 +218,7 @@ export default function ReportsPage() {
       const latest = sorted[0]!;
       const status = deriveStatus(latest);
       const def = defMap.get(code);
+      const conv = readConversion(latest.metadataJson);
       const sparkData = sorted.slice(0, 8).reverse().map((o) => o.valueNumeric ?? 0);
       const category = latest.category ?? 'other';
 
@@ -225,6 +242,9 @@ export default function ReportsPage() {
         observedAt: latest.observedAt,
         sparkData,
         displayPrecision: def?.displayPrecision ?? null,
+        // 换算留痕（spec 21 §15.7 S5.5 P1）：报告页的数值/区间必须与检验列表、详情同口径
+        converted: conv !== null,
+        fromUnit: conv?.fromUnit ?? null,
       };
 
       const existing = catMap.get(category) ?? [];
@@ -512,14 +532,10 @@ export default function ReportsPage() {
 
             {/* Metric rows */}
             {group.metrics.map((metric) => {
-              const refRange =
-                metric.refLow != null && metric.refHigh != null
-                  ? `${metric.refLow} – ${metric.refHigh}`
-                  : metric.refLow != null
-                    ? `> ${metric.refLow}`
-                    : metric.refHigh != null
-                      ? `< ${metric.refHigh}`
-                      : '—';
+              // 区间与值同一套精度规则（spec 21 §15.7 S5.5 P1）
+              const refRange = formatRange(metric.refLow, metric.refHigh, null, {
+                converted: metric.converted,
+              });
 
               return (
                 <div
@@ -535,12 +551,27 @@ export default function ReportsPage() {
                     </span>
                   </div>
                   <div className="text-right">
-                    <span className="text-[13px] font-mono font-semibold text-neutral-900 tabular-nums">
-                      {formatObsValue(metric.metricCode, metric.latestValue, metric.valueText, metric.displayPrecision)}
+                    <span
+                      className="text-[13px] font-mono font-semibold text-neutral-900 tabular-nums"
+                      title={
+                        metric.converted && metric.fromUnit
+                          ? `已换算自报告原文单位 ${metric.fromUnit}`
+                          : undefined
+                      }
+                    >
+                      {formatObsValue(metric.metricCode, metric.latestValue, metric.valueText, metric.displayPrecision, { converted: metric.converted })}
                     </span>
                     {metric.unit && (
                       <span className="text-[10px] font-mono text-neutral-400 ml-1">
                         {metric.unit}
+                      </span>
+                    )}
+                    {metric.converted && (
+                      <span
+                        className="ml-0.5 align-super text-[10px] text-neutral-400"
+                        title={`换算自 ${metric.fromUnit ?? '原始单位'}`}
+                      >
+                        *
                       </span>
                     )}
                   </div>

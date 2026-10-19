@@ -9,13 +9,17 @@ import {
   Tooltip,
   ReferenceArea,
 } from "recharts";
-import { cn } from "@/lib/utils";
+import { cn, formatConvertedNumber } from "@/lib/utils";
 import type { HealthStatus } from "./status-badge";
 
 interface TrendChartDataPoint {
   date: string;
   value: number;
   unit?: string | null;
+  /** 该点是否来自单位换算（spec 21 §15.7 S5.5 P2）：tooltip 要说明原文单位，图上不加角标（P4·A） */
+  converted?: boolean;
+  /** 换算前原始单位，如 mg/dL */
+  fromUnit?: string | null;
 }
 
 interface TrendChartProps {
@@ -101,13 +105,20 @@ function CustomTooltip({
             : "var(--color-neutral-900)",
         }}
       >
-        {point.value}
+        {dataPoint.converted
+          ? formatConvertedNumber(dataPoint.value)
+          : point.value}
         {dataPoint.unit && (
           <span className="ml-1 text-[11px] font-normal text-neutral-400">
             {dataPoint.unit}
           </span>
         )}
       </p>
+      {dataPoint.converted && (
+        <p className="mt-1 text-[10px] text-neutral-400 font-mono">
+          已换算自 {dataPoint.fromUnit ?? "原文单位"}
+        </p>
+      )}
       {abnormal && (
         <p
           className="mt-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.04em] font-mono"

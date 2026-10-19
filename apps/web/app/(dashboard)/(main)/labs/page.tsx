@@ -7,6 +7,7 @@ import { MetricSummaryCard } from '@/components/health/metric-summary-card';
 import { AnimatedEmptyState } from '@/components/animated-empty-state';
 import { deriveStatus, deriveDirection, getAbnormalityLabel, formatRange } from '@/lib/health-utils';
 import { formatDate, formatObsValue, isDurationMetric } from '@/lib/utils';
+import { readConversion } from '@/lib/conversion';
 import { TestTubes, Droplets, Activity, Microscope, FlaskConical, Dna, Download } from 'lucide-react';
 import { Button } from '@/components/button';
 import { downloadCsv } from '@/lib/export';
@@ -96,7 +97,11 @@ export default function LabsPage() {
             : ('stable' as const)
         : ('stable' as const);
 
-    return { code, sorted, latest, status, sparkData, deltaVal, deltaDir, count: obs.length };
+    // 换算标记（spec 21 §4.11 / S5.5 P0）：列表与详情必须用同一套格式化。
+    // 之前这里没传 {converted}，同一条换算观测在列表显示 145.86、详情显示 145.9（N1 真 bug）。
+    const latestConversion = readConversion(latest.metadataJson);
+
+    return { code, sorted, latest, status, sparkData, deltaVal, deltaDir, count: obs.length, latestConversion };
   });
 
   // Sort: abnormal first → most results → alphabetical
@@ -129,17 +134,22 @@ export default function LabsPage() {
             onClick={() => {
               downloadCsv(
                 'healthmanager-labs',
-                ['指标', '结果', '单位', '参考下限', '参考上限', '异常', '日期', '分类'],
-                items.map((o) => [
-                  o.metricCode,
-                  o.valueNumeric ?? o.valueText,
-                  o.unit,
-                  o.referenceRangeLow,
-                  o.referenceRangeHigh,
-                  o.isAbnormal ? '是' : '否',
-                  new Date(o.observedAt).toISOString().split('T')[0],
-                  o.category,
-                ]),
+                ['指标', '结果', '单位', '参考下限', '参考上限', '异常', '日期', '分类', '换算自'],
+                items.map((o) => {
+                  // 换算自列（spec 21 §15.3.2 L2）：未换算行留 —，换算行写「原文值 原文单位」
+                  const conv = readConversion(o.metadataJson);
+                  return [
+                    o.metricCode,
+                    o.valueNumeric ?? o.valueText,
+                    o.unit,
+                    o.referenceRangeLow,
+                    o.referenceRangeHigh,
+                    o.isAbnormal ? '是' : '否',
+                    new Date(o.observedAt).toISOString().split('T')[0],
+                    o.category,
+                    conv ? `${conv.rawValue} ${conv.fromUnit}` : '—',
+                  ];
+                }),
               );
             }}
           />
@@ -153,7 +163,7 @@ export default function LabsPage() {
             <MetricCard
               key={mg.code}
               title={displayName(mg.code)}
-              value={formatObsValue(mg.code, mg.latest.valueNumeric, mg.latest.valueText, precisionMap.get(mg.code))}
+              value={formatObsValue(mg.code, mg.latest.valueNumeric, mg.latest.valueText, precisionMap.get(mg.code), { converted: !!mg.latestConversion })}
               unit={isDurationMetric(mg.code) ? '' : (mg.latest.unit ?? '')}
               delta={
                 mg.deltaVal
@@ -181,7 +191,7 @@ export default function LabsPage() {
               key={mg.code}
               metricCode={mg.code}
               name={displayName(mg.code)}
-              latestValue={formatObsValue(mg.code, mg.latest.valueNumeric, mg.latest.valueText, precisionMap.get(mg.code))}
+              latestValue={formatObsValue(mg.code, mg.latest.valueNumeric, mg.latest.valueText, precisionMap.get(mg.code), { converted: !!mg.latestConversion })}
               unit={isDurationMetric(mg.code) ? '' : (mg.latest.unit ?? '')}
               status={mg.status}
               statusLabel={statusLabel}
@@ -191,6 +201,7 @@ export default function LabsPage() {
                 mg.latest.referenceRangeLow,
                 mg.latest.referenceRangeHigh,
                 mg.latest.unit,
+                { converted: !!mg.latestConversion },
               )}
               latestDate={formatDate(mg.latest.observedAt)}
             />

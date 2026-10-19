@@ -28,11 +28,13 @@ export function formatDeltaNumber(d: number): string {
 export function valueDisplay(
   row: Pick<
     CompareMetricRow,
-    "metricCode" | "value" | "valueText" | "displayPrecision"
+    "metricCode" | "value" | "valueText" | "displayPrecision" | "converted"
   >,
 ): string {
   if (row.value == null && !row.valueText) return "—";
-  return formatObsValue(row.metricCode, row.value, row.valueText, row.displayPrecision);
+  return formatObsValue(row.metricCode, row.value, row.valueText, row.displayPrecision, {
+    converted: !!row.converted,
+  });
 }
 
 // 变化列：↑红（升）↓绿（降，中国涨跌习惯，不判断好坏）；单位不可比时降级说明
@@ -195,6 +197,7 @@ export function BatchCard({
                               value: row.prevValue,
                               valueText: row.prevValueText,
                               displayPrecision: row.displayPrecision,
+                              converted: row.prevConverted,
                             })
                           : (row.prevValueText ?? "—")
                         : "—"}

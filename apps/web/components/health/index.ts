@@ -7,3 +7,5 @@ export { ProvenancePill } from './provenance-pill';
 export { ShareCard } from './share-card';
 export { ImportJobRow, ImportJobHeader } from './import-job-row';
 export { AIMessageBubble } from './ai-message';
+export { RangeSourceBadge } from './range-source-badge';
+export { ClaimCitationModal } from './claim-citation-modal';

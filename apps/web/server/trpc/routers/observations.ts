@@ -18,6 +18,7 @@ import {
 import { emitEvent } from '@openvitals/events';
 import { getActiveProfileId } from '../active-profile';
 import { requestRangeRecompute } from '../../lib/worker-client';
+import { readConversion } from '@/lib/conversion';
 import {
   groupRowsByDay,
   buildBatches,
@@ -362,11 +363,18 @@ export const observationsRouter = createRouter({
         dateTo: input.dateTo,
       });
 
-      const dataPoints = rows.map((r) => ({
-        date: r.observedAt,
-        value: r.valueNumeric,
-        unit: r.unit,
-      }));
+      // 换算标记随点返回（spec 21 §15.7 S5.5 P2）：图表 tooltip 要说明「这个点是从哪个单位换来的」，
+      // 而趋势接口原先只给 value/unit，前端无法判断精度该走哪套规则（§15.6 N1 同型问题）
+      const dataPoints = rows.map((r) => {
+        const conv = readConversion(r.metadataJson);
+        return {
+          date: r.observedAt,
+          value: r.valueNumeric,
+          unit: r.unit,
+          converted: conv !== null,
+          fromUnit: conv?.fromUnit ?? null,
+        };
+      });
 
       return { dataPoints };
     }),

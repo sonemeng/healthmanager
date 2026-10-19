@@ -223,7 +223,17 @@ async function main() {
 
   run('pnpm', ['--filter', '@openvitals/web', 'build']);
   run('pnpm', ['--filter', '@openvitals/ingestion-worker', 'build']);
-  run('pnpm', ['exec', 'tsup', 'packages/database/src/seed/run.ts', '--format', 'cjs', '--target', 'node22', '--out-dir', 'desktop-runtime/app/bootstrap', '--clean']);
+  // tsup 不是根 devDependency，只在各包自己的 node_modules 里装过（实测根目录
+  // `pnpm exec tsup` 直接 ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL: Command "tsup" not found）。
+  // 用 --dir 切到 apps/desktop 解析二进制，参数里的路径相对 apps/desktop 上退两级回到仓库根。
+  run('pnpm', [
+    '--dir', 'apps/desktop', 'exec', 'tsup',
+    '../../packages/database/src/seed/run.ts',
+    '--format', 'cjs',
+    '--target', 'node22',
+    '--out-dir', '../../desktop-runtime/app/bootstrap',
+    '--clean',
+  ]);
 
   await copyRequired(join(root, 'apps', 'web', '.next', 'standalone'), join(staging, 'app', 'web'));
   await copyRequired(

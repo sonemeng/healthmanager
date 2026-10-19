@@ -342,7 +342,7 @@ export interface ResolvedRange {
   /** 结构化结论码（spec 21 §4.2）：阻断类才落 range_pending */
   gateCode?: GateCode;
   gateReason?: string;
-  /** 实际采用的来源等级（spec 21 · S0b 诊断用） */
+  /** 实际采用的来源等级（spec 21 · S0b 诊断用；S5.4 起也用于判 range_unverified） */
   sourceTier?: string;
   /** 同等级多来源区间冲突，已回落或放弃自动择一 */
   conflicted?: boolean;
@@ -380,16 +380,22 @@ export function resolveReferenceRange(
     };
   }
 
-  // ── 门禁作用域（spec 21 §4.1 / D2）：定性项不进门禁 ────────────────────────
-  // 判据是「没有数值」而不是「属于尿检」：
+  // ── 门禁作用域（spec 21 §4.1 / D2 + S5.4）：定性/半定量项不进门禁 ──────────
+  // 判据是「没有数值」或「本来就没有数值可比」：
   //  - value === null（纯定性/半定量，如 尿蛋白 1+、隐血 阴性）
-  //  - unit_kind = 'qualitative'（字典已标注定性，即使将来解析出数值也不判区间）
+  //  - unit_kind ∈ {qualitative, semi_quantitative}（字典已标注，即使将来解析出数值也不判区间）
+  // semi_quantitative（少量/偶见/+ /±）在 S5.4 补入：这类项常无单位，
+  // 若不豁免会被 unit_missing 拦（epithelial_cells 改 kind 后正是如此）。
   // 这类条目没有数值可比，解析区间与门禁都没有意义 → 不解析 fallback、不门禁，
   // isAbnormal 只取报告自身的 ↑/↓ 标记（refLow/refHigh 为 null 时自动回落）。
   // 实测：23 条空区间里 20 条是这类；一并拦会让一份尿常规刷出 20 条零信息量待办。
   // 反例必须记住：尿肌酐 5922.2 µmol/L、尿沉渣红细胞 0~3/HPF 是尿检里的**定量**项，
   // value 非 null → 照常门禁。
-  if (extraction.value === null || metric.unitKind === 'qualitative') {
+  if (
+    extraction.value === null ||
+    metric.unitKind === 'qualitative' ||
+    metric.unitKind === 'semi_quantitative'
+  ) {
     return { low: null, high: null, exempted: true };
   }
 
@@ -485,12 +491,27 @@ export function resolveReferenceRange(
       index += 1;
     }
 
+    // spec 21 §15.4：命中 unverified 来源 → 区间照常可用，但打**提示级** gateCode。
+    // 不阻断任务（用户没有可执行动作），但 materialize 据此排除 D7 自动通过，
+    // 留给人在任务页看一眼「这条区间没写出处」。
+    // 注意**不置 gated**：gated=true 在 normalizeExtractions 里会被当成
+    // range_unit_mismatch（区间已置空）而推 flagged/跳过落库；此处区间是可用的，
+    // 只留 gateCode 这一个信号（materialize 的 canAutoVerify 判 gateCode != null）。
+    const tierGate =
+      tierRank(tier) === SOURCE_TIER_RANK.unverified
+        ? {
+            gateCode: 'range_unverified' as GateCode,
+            gateReason: '区间来自未核验来源（source_tier=unverified），可用但未自动通过',
+          }
+        : {};
+
     if (group.length === 1) {
       return {
         low: group[0]!.low,
         high: group[0]!.high,
         sourceTier: tier,
         ...(conflicted ? { conflicted: true } : {}),
+        ...tierGate,
       };
     }
 
@@ -501,6 +522,7 @@ export function resolveReferenceRange(
         high: group[0]!.high,
         sourceTier: tier,
         ...(conflicted ? { conflicted: true } : {}),
+        ...tierGate,
       };
     }
 

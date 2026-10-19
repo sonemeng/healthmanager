@@ -22,6 +22,12 @@ export type CompareMetricRow = {
   deltaPercent: number | null;
   direction: "up" | "down" | "flat" | null;
   unitIncomparable: boolean;
+  /** 本次值是否来自单位换算（spec 21 §15.7 S5.5 P1）：决定格式化精度与「换算自」列 */
+  converted?: boolean;
+  /** 换算前原始单位（如 mg/dL）；未换算为 null */
+  fromUnit?: string | null;
+  prevConverted?: boolean;
+  prevFromUnit?: string | null;
 };
 
 export type CompareBatch = {

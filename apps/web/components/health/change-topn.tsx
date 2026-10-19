@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { TrendingUpDown } from "lucide-react";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/biomarker-categories";
 import { cn, formatObsValue } from "@/lib/utils";
+import { formatRange } from "@/lib/health-utils";
 import {
   formatDeltaNumber,
   formatDeltaPercent,
@@ -45,18 +46,12 @@ function flipRank(m: CompareMetricRow): number {
   return 2;
 }
 
-function fmtRangeNum(n: number): string {
-  return String(n);
-}
-
-/** 参考区间文字：双侧 lo~hi；单侧 ≥lo / ≤hi；无区间返回 null */
+/** 参考区间文字：折算值与值同一套精度规则（spec 21 §15.7 S5.5 P1） */
 function rangeText(m: CompareMetricRow): string | null {
-  const lo = m.referenceRangeLow;
-  const hi = m.referenceRangeHigh;
-  if (lo != null && hi != null) return `参考 ${fmtRangeNum(lo)}~${fmtRangeNum(hi)}`;
-  if (hi != null) return `参考 ≤${fmtRangeNum(hi)}`;
-  if (lo != null) return `参考 ≥${fmtRangeNum(lo)}`;
-  return null;
+  if (m.referenceRangeLow == null && m.referenceRangeHigh == null) return null;
+  return `参考 ${formatRange(m.referenceRangeLow, m.referenceRangeHigh, null, {
+    converted: !!m.converted,
+  })}`;
 }
 
 /** 本次相对区间的状态说明（与化验单 ↑/↓ 语义一致） */
@@ -172,12 +167,14 @@ export function ChangeTopN({
                     m.prevValue,
                     m.prevValueText,
                     m.displayPrecision,
+                    { converted: !!m.prevConverted },
                   );
                   const curDisplay = formatObsValue(
                     m.metricCode,
                     m.value,
                     m.valueText,
                     m.displayPrecision,
+                    { converted: !!m.converted },
                   );
 
                   const deltaText =

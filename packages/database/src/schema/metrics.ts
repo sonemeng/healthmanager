@@ -35,6 +35,10 @@ export const metricDefinitions = pgTable("metric_definitions", {
   // source_tier 缺失时按 unverified 处理（可用，但优先级最低、UI 显示「来源待补」）。
   sourceTier: varchar("source_tier", { length: 20 }),
   citation: text("citation"),
+  // citation_kind（spec 21 · S5.0 / 0026）：cited（有文献引证）/ exempt（经人判定无通行
+  // 参考区间）/ NULL（待补）。与 source_tier 联合判定「来源待补」：
+  //   source_tier='unverified' AND citation IS NULL AND citation_kind IS NULL
+  citationKind: varchar("citation_kind", { length: 12 }),
   verifiedAt: timestamp("verified_at"),
   verifiedBy: varchar("verified_by", { length: 100 }),
   unitKind: varchar("unit_kind", { length: 20 }),
@@ -66,6 +70,8 @@ export const referenceRanges = pgTable(
     // provenance（spec 21 · S0a/S0b）
     sourceTier: varchar("source_tier", { length: 20 }),
     citation: text("citation"),
+    // citation_kind（spec 21 · S5.0 / 0026）：同 metric_definitions，见上。
+    citationKind: varchar("citation_kind", { length: 12 }),
     verifiedAt: timestamp("verified_at"),
     verifiedBy: varchar("verified_by", { length: 100 }),
     // 学习行溯源：这条区间来自哪条观测（点开可回到原报告）

@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useMemo, useState } from "react";
+import { use, useMemo, useState, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc/client";
 import { TitleActionHeader } from "@/components/title-action-header";
 import {
@@ -17,6 +17,7 @@ import {
 } from "@/lib/health-utils";
 import { cn, formatDate, formatObsValue, isDurationMetric } from "@/lib/utils";
 import { ConversionDot } from "@/components/health/conversion-dot";
+import { RangeSourceBadge } from "@/components/health/range-source-badge";
 import { readConversion } from "@/lib/conversion";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Pill, TrendingUp, TrendingDown, Minus } from "lucide-react";
@@ -31,6 +32,18 @@ const TIME_RANGES = [
 
 type TimeRangeKey = (typeof TIME_RANGES)[number]["key"];
 
+// 来源等级排名（与 packages/ingestion/src/normalizer.ts 的 SOURCE_TIER_RANK 一致）：
+// 同一指标多行区间时只取等级最高的一行做徽标，避免把低等级来源当代表。
+const TIER_RANK: Record<string, number> = {
+  national_standard: 0,
+  guideline: 1,
+  textbook: 2,
+  instrument: 3,
+  lab_learned: 4,
+  user_input: 5,
+  unverified: 9,
+};
+
 function formatMetricName(code: string) {
   return code.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -39,11 +52,14 @@ function SummaryCard({
   label,
   value,
   subtext,
+  badge,
   variant = "default",
 }: {
   label: string;
   value: string;
   subtext?: string;
+  /** 参考区间卡可挂来源徽标（spec 21 §15.5.2）；其余卡片不传 */
+  badge?: ReactNode;
   variant?: "default" | "warning" | "success" | "accent";
 }) {
   const valueColor = {
@@ -71,6 +87,7 @@ function SummaryCard({
           {subtext}
         </div>
       )}
+      {badge && <div className="mt-1">{badge}</div>}
     </div>
   );
 }
@@ -87,13 +104,15 @@ export default function LabDetailPage({
     limit: 200,
   });
   const { data: metricsData } = trpc.metrics.list.useQuery();
+  // 该指标的区间行（spec 21 §15.5.2）：详情页要显示来源徽标（tier/citation）
+  const { data: rangeRows } = trpc.metrics.referenceRanges.useQuery({ metricCode });
+  const metricDef = metricsData?.find((m) => m.id === metricCode);
   const { data: prefsData } = trpc.preferences.get.useQuery();
   const { data: optimalRangesData } = trpc.optimalRanges.forUser.useQuery({
     metricCode,
   });
   const { data: medsData } = trpc.medications.list.useQuery({});
-  const displayPrecision =
-    metricsData?.find((m) => m.id === metricCode)?.displayPrecision ?? null;
+  const displayPrecision = metricDef?.displayPrecision ?? null;
   const showOptimal = prefsData?.showOptimalRanges ?? true;
   const optimalRange = optimalRangesData?.[metricCode] ?? null;
 
@@ -248,6 +267,8 @@ export default function LabDetailPage({
         date: new Date(dp.date).toISOString(),
         value: dp.value,
         unit: dp.unit,
+        converted: dp.converted,
+        fromUnit: dp.fromUnit,
       }));
 
     const seen = new Map<string, number>();
@@ -308,11 +329,25 @@ export default function LabDetailPage({
     );
   }
 
+  const latestConversion = readConversion(latest?.metadataJson);
   const refRange = formatRange(
     latest?.referenceRangeLow,
     latest?.referenceRangeHigh,
     latest?.unit,
+    { converted: !!latestConversion },
   );
+
+  // 参考区间来源徽标（spec 21 §15.5.2）：优先区间行（有 tier/citation），
+  // 无区间行时退回字典条目自身的 tier/citation。「来源待补」判据是 tier=unverified 且无 citationKind。
+  const bestRangeRow = (rangeRows ?? [])
+    .slice()
+    .sort((a, b) => (TIER_RANK[a.sourceTier ?? "unverified"] ?? 9) - (TIER_RANK[b.sourceTier ?? "unverified"] ?? 9))[0];
+  const badgeTier = (bestRangeRow?.sourceTier ?? metricDef?.sourceTier ?? null) as string | null;
+  const badgeCitationKind = bestRangeRow
+    ? bestRangeRow.citationKind ?? null
+    : metricDef?.citationKind ?? null;
+  const badgeCitation = bestRangeRow ? bestRangeRow.citation ?? null : metricDef?.citation ?? null;
+  const badgeVerifiedAt = bestRangeRow ? bestRangeRow.verifiedAt ?? null : metricDef?.verifiedAt ?? null;
 
   return (
     <div className="stagger-children">
@@ -382,7 +417,23 @@ export default function LabDetailPage({
           }
         />
         <SummaryCard label="检测次数" value={String(items.length)} />
-        <SummaryCard label="参考区间" value={refRange} />
+        <SummaryCard
+          label="参考区间"
+          value={refRange}
+          badge={
+            <RangeSourceBadge
+              tier={badgeTier}
+              citationKind={
+                badgeCitationKind === "cited" || badgeCitationKind === "exempt"
+                  ? badgeCitationKind
+                  : null
+              }
+              citation={badgeCitation}
+              source={bestRangeRow?.source ?? null}
+              verifiedAt={badgeVerifiedAt}
+            />
+          }
+        />
         {showOptimal && optimalRange && (
           <SummaryCard
             label="理想区间"

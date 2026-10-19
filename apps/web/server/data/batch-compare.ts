@@ -9,6 +9,7 @@ import {
   unitConversions,
 } from '@openvitals/database';
 import type { Database } from '@openvitals/database/client';
+import { readConversion } from '@/lib/conversion';
 
 // 参与口径（与 compareBatches 既有口径一致）：
 // metricCode ≠ 'unmatched' 且 status ≠ 'flagged'；须有数值或文本值。
@@ -31,6 +32,7 @@ export async function fetchBatchRows(
       status: observations.status,
       observedAt: observations.observedAt,
       updatedAt: observations.updatedAt,
+      metadataJson: observations.metadataJson,
       dictName: metricDefinitions.name,
       dictCategory: metricDefinitions.category,
       dictUnit: metricDefinitions.unit,
@@ -75,6 +77,8 @@ export interface BatchRow {
   status: string;
   observedAt: Date;
   updatedAt: Date | null;
+  /** 换算留痕（spec 21 §4.9）：批次对比页要按"是不是换算值"选精度，与列表/详情同口径 */
+  metadataJson: unknown;
   dictName: string | null;
   dictCategory: string | null;
   dictUnit: string | null;
@@ -113,6 +117,14 @@ export interface BatchMetricRow {
   deltaPercent: number | null;
   direction: 'up' | 'down' | 'flat' | null;
   unitIncomparable: boolean;
+  /** 本次值是否来自单位换算（metadata.conversion 存在）。决定格式化精度：换算值走有效数字 */
+  converted: boolean;
+  /** 换算前的原始单位（如 mg/dL）；未换算为 null。CSV「换算自」列用它 */
+  fromUnit: string | null;
+  /** 上一次值是否来自换算 */
+  prevConverted: boolean;
+  /** 上一次值的原始单位 */
+  prevFromUnit: string | null;
 }
 
 export interface Batch {
@@ -219,6 +231,10 @@ export function compareTwoDays(
     const presence: 'both' | 'new' | 'missing' =
       curRow && prevRow ? 'both' : curRow ? 'new' : 'missing';
 
+    // 换算留痕（metadata.conversion）：只影响显示精度与 CSV 溯源列，不参与 delta 计算
+    const curConv = readConversion(curRow?.metadataJson);
+    const prevConv = readConversion(prevRow?.metadataJson);
+
     let delta: number | null = null;
     let deltaPercent: number | null = null;
     let direction: 'up' | 'down' | 'flat' | null = null;
@@ -285,6 +301,12 @@ export function compareTwoDays(
       deltaPercent,
       direction,
       unitIncomparable,
+      // 换算标记（spec 21 §15.7 S5.5 P1）：值的格式化必须与列表/详情同一套精度规则，
+      // 否则同一个数在对比页显示 145.86、在详情页显示 145.9（§15.6 N1 的同型问题）
+      converted: curConv !== null,
+      fromUnit: curConv?.fromUnit ?? null,
+      prevConverted: prevConv !== null,
+      prevFromUnit: prevConv?.fromUnit ?? null,
     };
   });
 

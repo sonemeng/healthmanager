@@ -25,6 +25,9 @@ export { canonicalUnit };
  * `reason` 是给人看的整句中文，`code` 给机器分流：
  *  - `unit_mismatch` / `band_mismatch` → **阻断**：落 `range_pending`，任务进 review_needed
  *  - `unit_missing` / `dict_unit_missing` → **提示**：只打徽标，不阻断任务完成
+ *  - `range_unverified` → **提示（spec 21 §15.4）**：区间来自 `source_tier='unverified'`
+ *    的字典/学习行（来源未核），行照常 extracted，但按 D7 排除自动通过——
+ *    用户对「这条区间没写出处」没有可执行动作，阻断只会训练「见待办就点确认」。
  *
  * 为什么必须结构化：UI 要按严重度决定「进待办」还是「只提示」，
  * 自由文本做不到可靠判定（`reason` 里既有"缺失"也有"不一致"，字符串匹配迟早出错）。
@@ -33,7 +36,8 @@ export type GateCode =
   | 'unit_mismatch'
   | 'band_mismatch'
   | 'unit_missing'
-  | 'dict_unit_missing';
+  | 'dict_unit_missing'
+  | 'range_unverified';
 
 export interface GateResult {
   ok: boolean;
