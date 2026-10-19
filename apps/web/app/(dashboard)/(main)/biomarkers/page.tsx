@@ -42,8 +42,66 @@ function formatRange(
   return "—";
 }
 
-// 来源分组（spec 19 §3.4 + 2026-10-12 用户拍板）：
-// 国标 → 指南/平台 → 通行口径 → 检验互认标识（如陕HR，来源列显示标识本身）→ 检验科区间
+const SEX_LABELS: Record<string, string> = { male: "男", female: "女" };
+
+// 来源等级排名（与 packages/ingestion/src/normalizer.ts 的 SOURCE_TIER_RANK 一致）：
+// 同一性别有多行时只取等级最高的一行做"默认区间"展示，避免同一性别显示两条互斥数值。
+const TIER_RANK: Record<string, number> = {
+  national_standard: 0,
+  guideline: 1,
+  textbook: 2,
+  instrument: 3,
+  lab_learned: 4,
+  unverified: 5,
+};
+
+type RangeRow = {
+  id?: number | null;
+  sex: string | null;
+  ageMin: number | null;
+  ageMax: number | null;
+  rangeLow: number | null;
+  rangeHigh: number | null;
+  unit: string | null;
+  sourceTier?: string | null;
+  source?: string | null;
+};
+
+/**
+ * 默认参考区间列（spec 21 §4.5）：有分性别基准行时合并显示「男 40~50 · 女 35~45」。
+ *
+ * 为什么必须合并：字典基准列（metric_definitions.reference_range_low/high）只是
+ * **不分性别的兜底值**，与 reference_ranges 里的分性别国标并存时会被读成"字典写错了"
+ * （spec 21 §1.3.1 用户追问的源头）。把男女两行摆在同一格，口径一眼可辨。
+ *
+ * 口径：只取「基准单位行（unit 为 NULL）+ 有性别 + 无年龄分层」的行，
+ * 每个性别按来源等级取最高、同等级取 id 最小的一条；学习行（unit 非 NULL）
+ * 单位口径不同，不参与"默认"展示。
+ */
+function pickBestSexRanges(ranges: RangeRow[]): Array<[string, RangeRow]> {
+  const bySex = new Map<string, RangeRow>();
+  const rank = (r: RangeRow) => TIER_RANK[r.sourceTier ?? "unverified"] ?? 9;
+
+  for (const r of ranges) {
+    if (r.unit != null) continue;
+    if (!r.sex) continue;
+    if (r.ageMin != null || r.ageMax != null) continue;
+    const cur = bySex.get(r.sex);
+    if (
+      !cur ||
+      rank(r) < rank(cur) ||
+      (rank(r) === rank(cur) && (r.id ?? 0) < (cur.id ?? 0))
+    ) {
+      bySex.set(r.sex, r);
+    }
+  }
+
+  const ordered = ["male", "female"].filter((s) => bySex.has(s));
+  for (const s of bySex.keys()) if (!ordered.includes(s)) ordered.push(s);
+  return ordered.map((s) => [s, bySex.get(s)!]);
+}
+
+// 来源分组（spec 19 §3.4 + 2026-10-12 用户拍板）：// 国标 → 指南/平台 → 通行口径 → 检验互认标识（如陕HR，来源列显示标识本身）→ 检验科区间
 function sourceGroup(source: string | null): { order: number; label: string } {
   if (source?.startsWith("WS/T")) return { order: 0, label: "国家标准" };
   if (source === "通行口径") return { order: 2, label: "通行口径" };
@@ -421,13 +479,35 @@ export default function BiomarkersPage() {
                                   {m.unit ?? "—"}
                                 </div>
 
-                                {/* 默认区间 */}
+                                {/* 默认区间：有分性别基准行时合并显示（spec 21 §4.5） */}
                                 <div className="text-xs text-neutral-600 font-mono">
-                                  {formatRange(
-                                    m.referenceRangeLow,
-                                    m.referenceRangeHigh,
-                                    m.unit,
-                                  )}
+                                  {(() => {
+                                    const sexRanges = pickBestSexRanges(metricRanges);
+                                    if (sexRanges.length === 0) {
+                                      return formatRange(
+                                        m.referenceRangeLow,
+                                        m.referenceRangeHigh,
+                                        m.unit,
+                                      );
+                                    }
+                                    return (
+                                      <span
+                                        title={sexRanges
+                                          .map(
+                                            ([sex, r]) =>
+                                              `${SEX_LABELS[sex] ?? sex} ${formatRange(r.rangeLow, r.rangeHigh, m.unit)}${r.source ? `（${r.source}）` : ""}`,
+                                          )
+                                          .join(" / ")}
+                                      >
+                                        {sexRanges
+                                          .map(
+                                            ([sex, r]) =>
+                                              `${SEX_LABELS[sex] ?? sex} ${formatRange(r.rangeLow, r.rangeHigh, null)}`,
+                                          )
+                                          .join(" · ")}
+                                      </span>
+                                    );
+                                  })()}
                                 </div>
 
                                 {/* 别名 */}
@@ -493,8 +573,8 @@ export default function BiomarkersPage() {
                                       <div className="card">
                                         <div className="grid grid-cols-[1fr_1fr_1fr_1.2fr] gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-2">
                                           {[
-                                            "Sex",
-                                            "Age",
+                                            "性别",
+                                            "年龄",
                                             "区间",
                                             "来源",
                                           ].map((h) => (
@@ -537,11 +617,10 @@ export default function BiomarkersPage() {
                                                 <div className="flex items-center gap-1.5">
                                                   <span className="text-xs text-neutral-700 font-mono">
                                                     {r.sex
-                                                      ? r.sex
-                                                          .charAt(0)
-                                                          .toUpperCase() +
-                                                        r.sex.slice(1)
-                                                      : "Any"}
+                                                      ? (SEX_LABELS[r.sex] ??
+                                                        r.sex.charAt(0).toUpperCase() +
+                                                          r.sex.slice(1))
+                                                      : "不限"}
                                                   </span>
                                                   {isUserMatch && r.sex && (
                                                     <span className="inline-block size-1.5 rounded-full bg-accent-500" />
@@ -555,7 +634,7 @@ export default function BiomarkersPage() {
                                                       ? `${r.ageMin}+`
                                                       : r.ageMax != null
                                                         ? `≤ ${r.ageMax}`
-                                                        : "Any"}
+                                                        : "不限"}
                                                 </div>
                                                 <div className="text-xs font-medium text-neutral-900 font-mono">
                                                   {formatRange(

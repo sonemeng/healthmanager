@@ -453,7 +453,9 @@ export const observationsRouter = createRouter({
             and(
               eq(observations.importJobId, jobId),
               eq(observations.userId, ctx.userId),
-              inArray(observations.status, ['extracted', 'flagged']),
+              // spec 21 §4.3：range_pending 是「区间待定」的待办行，也算未处理完；
+              // 漏掉它任务会永远卡在 review_needed（用户处理完也转不成 completed）。
+              inArray(observations.status, ['extracted', 'flagged', 'range_pending']),
             ),
           )
           .limit(1);
