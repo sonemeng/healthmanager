@@ -242,9 +242,18 @@ DO $$
 DECLARE
   n integer;
 BEGIN
+  -- 断言口径（v0.1.27 修正）：只要求「名下至少有一条区间行」的字典条目被认领。
+  -- 理由（实测 2026-10-20，空库→全量迁移→字典播种）：新装库里有 24 条字典条目
+  -- **没有任何 reference_ranges 行**（如 magnesium / phosphate / indirect_bilirubin /
+  -- neutrophils_pct …）。它们的 tier 在开发机真实库上来自用户报告学成的行（lab_learned），
+  -- 空库里不存在这种行，0024 只能如实标成 unverified —— 此时没有「出处」可认领，
+  -- 强行写 exempt 等于把「其实有国标、只是新装还没有区间行」说成「本来就没有通行区间」，
+  -- 属于伪造来源。这类条目由校验器 R8（WARN，来源待补）呈现，不阻断打包。
+  -- 有区间行的条目仍然硬断言：一条 unverified 区间说不出出处就是缺陷。
   SELECT count(*) INTO n
-  FROM metric_definitions
-  WHERE source_tier = 'unverified' AND citation IS NULL AND citation_kind IS NULL;
+  FROM metric_definitions m
+  WHERE m.source_tier = 'unverified' AND m.citation IS NULL AND m.citation_kind IS NULL
+    AND EXISTS (SELECT 1 FROM reference_ranges r WHERE r.metric_code = m.id);
   IF n > 0 THEN
     RAISE EXCEPTION '0026: % metric_definitions unverified rows lack citation/citation_kind', n;
   END IF;

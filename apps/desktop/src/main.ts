@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { access, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { planBootstrapSteps } from '../../../packages/database/src/bootstrap/plan';
 
 // Explicit overrides allow isolated package verification without colliding with
 // a running local installation. Normal desktop launches retain these defaults.
@@ -308,21 +309,41 @@ async function startLocalServices() {
   if (initialized && appliedMigrations.length === 0) {
     appliedMigrations = migrations.filter((file) => file.slice(0, 4) <= '0010');
   }
+
+  // Bootstrap order is planned in packages/database/src/bootstrap/plan.ts so the
+  // packaging gate verifies exactly the sequence that ships. On a brand new database
+  // the plan inserts a dictionary-only seed right before the first migration that
+  // declares `@requires-dictionary`: those migrations insert reference ranges that
+  // reference metric_definitions, and an empty dictionary makes PostgreSQL reject
+  // them (the desktop then quits with "HealthManager 无法启动").
+  const seedProgram = runtimePath('bootstrap', 'run.js');
+  const steps = planBootstrapSteps(
+    await Promise.all(
+      migrations.map(async (name) => ({
+        name,
+        sql: await readFile(path.join(migrationsDir, name), 'utf8'),
+      })),
+    ),
+    appliedMigrations,
+    { isNewInstall: !initialized },
+  );
+
   if (!initialized) {
     await run(createdb, ['-h', '127.0.0.1', '-p', String(POSTGRES_PORT), '-U', 'postgres', 'healthmanager'], sharedEnv);
-    const seedProgram = runtimePath('bootstrap', 'run.js');
     await requireRuntimeFile(seedProgram);
   }
 
-  for (const migration of migrations) {
-    if (appliedMigrations.includes(migration)) continue;
-    await run(psql, ['-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-p', String(POSTGRES_PORT), '-U', 'postgres', '-d', 'healthmanager', '-f', path.join(migrationsDir, migration)], sharedEnv);
-    appliedMigrations.push(migration);
+  for (const step of steps) {
+    if (step.kind === 'seed-dictionary') {
+      await run(process.execPath, [seedProgram, '--dictionary-only'], { ...sharedEnv, ELECTRON_RUN_AS_NODE: '1' });
+      continue;
+    }
+    await run(psql, ['-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-p', String(POSTGRES_PORT), '-U', 'postgres', '-d', 'healthmanager', '-f', path.join(migrationsDir, step.name)], sharedEnv);
+    appliedMigrations.push(step.name);
     await writeFile(statePath, JSON.stringify({ databaseInitialized: true, appliedMigrations }), 'utf8');
   }
 
   if (!initialized) {
-    const seedProgram = runtimePath('bootstrap', 'run.js');
     await run(process.execPath, [seedProgram], { ...sharedEnv, ELECTRON_RUN_AS_NODE: '1' });
   }
 

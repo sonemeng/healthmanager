@@ -221,6 +221,10 @@ async function main() {
   await rm(staging, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
 
+  // 迁移先落到 staging：随后的 verify:clean-install 要验「装进包里的那份 SQL」，
+  // 而不是源码目录里的副本（门禁验 A、发货发 B 是 07 号坑 20 的病根）。
+  await copyRequired(join(root, 'packages', 'database', 'drizzle'), join(staging, 'app', 'migrations'));
+
   run('pnpm', ['--filter', '@openvitals/web', 'build']);
   run('pnpm', ['--filter', '@openvitals/ingestion-worker', 'build']);
   // tsup 不是根 devDependency，只在各包自己的 node_modules 里装过（实测根目录
@@ -234,6 +238,11 @@ async function main() {
     '--out-dir', '../../desktop-runtime/app/bootstrap',
     '--clean',
   ]);
+
+  // spec 07 · 坑 19/20：audit:metrics 只验开发机真实库（升级形态），而 Setup exe 卖的是
+  // 「空库 → 全量迁移 → seed」。这里用刚构建出的 bootstrap/run.js 在独立集群上把交付形态
+  // 整条跑一遍（与 desktop main.ts 共用 plan.ts 的编排），ERROR > 0 直接中断打包。
+  run('pnpm', ['--filter', '@openvitals/database', 'verify:clean-install']);
 
   await copyRequired(join(root, 'apps', 'web', '.next', 'standalone'), join(staging, 'app', 'web'));
   await copyRequired(
@@ -249,7 +258,6 @@ async function main() {
   await copyRequired(join(root, 'apps', 'web', 'public'), join(staging, 'app', 'web', 'apps', 'web', 'public'));
   await copyRequired(join(root, 'services', 'ingestion-worker', 'dist'), join(staging, 'app', 'worker'));
   await writeFile(join(staging, 'app', 'worker', 'package.json'), '{"type":"module"}\n', 'utf8');
-  await copyRequired(join(root, 'packages', 'database', 'drizzle'), join(staging, 'app', 'migrations'));
 
   const trimmed = await pruneForeignNatives(join(staging, 'app'));
   const collapsed = await collapseStagedDuplicates(join(staging, 'app', 'web'));

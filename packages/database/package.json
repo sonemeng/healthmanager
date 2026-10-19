@@ -15,6 +15,7 @@
     "db:seed": "tsx src/seed/run.ts",
     "db:studio": "drizzle-kit studio",
     "audit:metrics": "tsx scripts/audit-metric-dictionary.ts",
+    "verify:clean-install": "tsx scripts/verify-clean-install.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

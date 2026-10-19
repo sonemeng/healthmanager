@@ -12,6 +12,7 @@ import {
   panelTemplateMetrics,
 } from "../schema/testing";
 import { metricDefinitionSeeds } from "./data/metric-definitions";
+import { metricDefinitionsBefore0018 } from "../bootstrap/legacy-schema";
 import { CHINA_DICT_OVERRIDES } from "./data/china-overrides";
 import { referenceRangeSeeds } from "./data/reference-ranges";
 import { optimalRangeSeeds } from "./data/optimal-ranges";
@@ -24,6 +25,12 @@ import {
 async function main() {
   const db = getDb();
 
+  // 新装引导分相（07 号坑 19/20，v0.1.27）：空库全量迁移时 0018 的 reference_ranges
+  // INSERT 会撞 metric_definitions 外键，所以主程序会在 0018 之前先跑本模式——
+  // 只灌字典（外键的爹），区间等其余数据交给 0018 迁移与末尾的完整 seed。
+  // 顺序编排见 packages/database/src/bootstrap/plan.ts。
+  const dictionaryOnly = process.argv.includes("--dictionary-only");
+
   console.log("Seeding metric definitions...");
   // 字典中国化覆盖（spec 19）：与迁移 0018 的 UPDATE VALUES 同口径——
   // seed 只管新装机，存量库靠迁移；两处数值必须逐条一致（单一底册：19-附录）。
@@ -32,9 +39,14 @@ async function main() {
     return override ? { ...m, ...override } : m;
   });
   await db
-    .insert(metricDefinitions)
+    .insert(dictionaryOnly ? metricDefinitionsBefore0018 : metricDefinitions)
     .values(metricSeeds)
     .onConflictDoNothing();
+
+  if (dictionaryOnly) {
+    console.log("Dictionary seed completed (dictionary-only): metric_definitions only.");
+    return;
+  }
 
   console.log("Seeding reference ranges...");
   await db

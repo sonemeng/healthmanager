@@ -2,6 +2,12 @@
 -- 数值底册：19-附录-字典中国化全量对照表-20261012.md（159 条，✅111 换值/➖48 维持置空）
 -- 拍板记录：spec 19 §9（胆红素/血脂单侧、ARUP 全删替换、门禁保留、分期激素不进判定列）
 -- 存量库靠本迁移；新装机靠 seed 同口径（07 号坑 10：seed 是 onConflictDoNothing，不影响存量库）。
+--
+-- @requires-dictionary
+--   本迁移第 6/7 段的 INSERT 直接给 reference_ranges 写行，外键要求 metric_definitions
+--   已有对应指标。空库全量迁移时该表 0 行 → 外键失败、整库启动失败（07 号坑 19，0.1.26 实测）。
+--   桌面端 main.ts 见到本标记会先跑 `bootstrap/run.js --dictionary-only` 再执行本迁移；
+--   顺序编排见 packages/database/src/bootstrap/plan.ts（主程序与打包门禁共用同一份）。
 
 SET client_encoding = 'UTF8';
 
