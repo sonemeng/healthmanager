@@ -41,6 +41,16 @@ function formatCategoryName(cat: string) {
   return labels[cat] ?? cat;
 }
 
+// 门禁留痕（spec 21）：gateReason 是给人看的原因，gateCode 是给程序分档的码
+function readGate(metadataJson: unknown): { reason?: string; code?: string } {
+  if (!metadataJson || typeof metadataJson !== "object") return {};
+  const meta = metadataJson as { gateReason?: unknown; gateCode?: unknown };
+  return {
+    reason: typeof meta.gateReason === "string" ? meta.gateReason : undefined,
+    code: typeof meta.gateCode === "string" ? meta.gateCode : undefined,
+  };
+}
+
 // 候选编辑表单的字段中文标签（缺失时回退显示原始 key）
 const CANDIDATE_FIELD_LABELS: Record<string, string> = {
   name: "名称",
@@ -111,6 +121,13 @@ export default function ImportJobDetailPage({
   const correctMutation = trpc.observations.correct.useMutation({
     onSuccess: () => utils.importJobs.getDetail.invalidate({ id }),
   });
+  // spec 21 S2：区间待定的三个出口（确认无区间 / 手工补区间 / 改挂指标）
+  const resolveRangeMutation = trpc.observations.resolveRange.useMutation({
+    onSuccess: () => utils.importJobs.getDetail.invalidate({ id }),
+  });
+  const resolveAllBlankMutation = trpc.observations.resolveAllBlank.useMutation({
+    onSuccess: () => utils.importJobs.getDetail.invalidate({ id }),
+  });
   const reprocessMutation = trpc.importJobs.reprocess.useMutation({
     onSuccess: () => utils.importJobs.getDetail.invalidate({ id }),
   });
@@ -142,7 +159,15 @@ export default function ImportJobDetailPage({
 
   const stats = useMemo(() => {
     if (!detailObservations)
-      return { total: 0, abnormal: 0, confirmed: 0, pending: 0, fallbackDates: 0 };
+      return {
+        total: 0,
+        abnormal: 0,
+        confirmed: 0,
+        pending: 0,
+        extractable: 0,
+        rangePending: 0,
+        fallbackDates: 0,
+      };
     const total = detailObservations.length;
     const abnormal = detailObservations.filter((o) => o.isAbnormal).length;
     const confirmed = detailObservations.filter(
@@ -151,7 +176,23 @@ export default function ImportJobDetailPage({
     const fallbackDates = detailObservations.filter(
       (o) => o.observedAtIsFallback,
     ).length;
-    return { total, abnormal, confirmed, pending: total - confirmed, fallbackDates };
+    // 「全部确认」只能覆盖 extracted —— range_pending 需要用户先表态区间，
+    // 顺手批量确认掉等于把闸门变成摆设（spec 21 §4.5-5 的批量出口是另一个按钮）
+    const extractable = detailObservations.filter(
+      (o) => o.status === "extracted",
+    ).length;
+    const rangePending = detailObservations.filter(
+      (o) => o.status === "range_pending",
+    ).length;
+    return {
+      total,
+      abnormal,
+      confirmed,
+      pending: total - confirmed,
+      extractable,
+      rangePending,
+      fallbackDates,
+    };
   }, [detailObservations]);
 
   if (isLoading) {
@@ -227,14 +268,27 @@ export default function ImportJobDetailPage({
         }
         actions={
           <>
-            {stats.pending > 0 && (
+            {stats.extractable > 0 && (
               <button
                 onClick={confirmAll}
                 disabled={confirmMutation.isPending}
                 className="flex items-center gap-2 rounded-lg bg-accent-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-accent-700 transition-colors disabled:opacity-50"
               >
                 <CheckCheck className="h-4 w-4" />
-                全部确认（{stats.pending}）
+                全部确认（{stats.extractable}）
+              </button>
+            )}
+            {/* 批量出口（spec 21 §4.5-5）：一份报告真命中 20 条待办时，
+                逐个点会把人逼疯，也会训练出「见待定就点」的条件反射 */}
+            {stats.rangePending > 0 && (
+              <button
+                onClick={() => resolveAllBlankMutation.mutate({ importJobId: id })}
+                disabled={resolveAllBlankMutation.isPending}
+                className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700 shadow-xs transition-colors hover:bg-amber-100 disabled:opacity-50"
+                title="把本次导入里所有「区间待定」的行一次确认为「无参考区间」"
+              >
+                <CheckCheck className="h-4 w-4" />
+                全部确认无区间（{stats.rangePending}）
               </button>
             )}
             {observations.length > 0 && (
@@ -379,7 +433,9 @@ export default function ImportJobDetailPage({
               observations={obs}
               onConfirm={(obsId) => confirmMutation.mutate({ id: obsId })}
               onCorrect={(input) => correctMutation.mutateAsync(input)}
+              onResolveRange={(input) => resolveRangeMutation.mutateAsync(input)}
               isConfirming={confirmMutation.isPending}
+              isResolvingRange={resolveRangeMutation.isPending}
               precisionMap={precisionMap}
               metricNameMap={metricNameMap}
             />
@@ -718,7 +774,9 @@ function CategoryGroup({
   observations,
   onConfirm,
   onCorrect,
+  onResolveRange,
   isConfirming,
+  isResolvingRange,
   precisionMap,
   metricNameMap,
 }: {
@@ -737,6 +795,7 @@ function CategoryGroup({
     observedAt: Date | string | null;
     originalValueText?: string | null;
     correctionNote?: string | null;
+    metadataJson?: unknown;
   }[];
   onConfirm: (id: string) => void;
   onCorrect: (input: {
@@ -745,17 +804,89 @@ function CategoryGroup({
     unit?: string;
     correctionNote?: string;
   }) => Promise<unknown>;
+  onResolveRange: (input: {
+    id: string;
+    action: "keep_blank" | "set" | "rematch";
+    low?: number | null;
+    high?: number | null;
+    text?: string;
+    remember?: boolean;
+    metricCode?: string;
+    note?: string;
+  }) => Promise<unknown>;
   isConfirming: boolean;
+  isResolvingRange: boolean;
   precisionMap: Map<string, number | null>;
   metricNameMap?: Map<string, string>;
 }) {
   const abnormalCount = observations.filter((o) => o.isAbnormal).length;
+  const rangePendingCount = observations.filter(
+    (o) => o.status === "range_pending",
+  ).length;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [editUnit, setEditUnit] = useState("");
   const [editMetricCode, setEditMetricCode] = useState("");
   const [editNote, setEditNote] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+
+  // 「区间待定」行内表单（spec 21 §4.5-3）：三个动作共用一个展开区
+  const [rangeEditingId, setRangeEditingId] = useState<string | null>(null);
+  const [rangeLow, setRangeLow] = useState("");
+  const [rangeHigh, setRangeHigh] = useState("");
+  const [rangeText, setRangeText] = useState("");
+  const [rangeRemember, setRangeRemember] = useState(true);
+  const [rangeRematch, setRangeRematch] = useState("");
+  const [rangeBusy, setRangeBusy] = useState(false);
+
+  const startRangeEditing = (obs: (typeof observations)[number]) => {
+    setRangeEditingId(obs.id);
+    setRangeLow(obs.referenceRangeLow != null ? String(obs.referenceRangeLow) : "");
+    setRangeHigh(obs.referenceRangeHigh != null ? String(obs.referenceRangeHigh) : "");
+    setRangeText("");
+    setRangeRemember(true);
+    setRangeRematch(obs.metricCode === "unmatched" ? "" : obs.metricCode);
+  };
+
+  const hasRangeInput = rangeLow !== "" || rangeHigh !== "" || rangeText.trim() !== "";
+
+  const submitRangeSet = async (obsId: string) => {
+    setRangeBusy(true);
+    try {
+      await onResolveRange({
+        id: obsId,
+        action: "set",
+        ...(rangeLow !== "" ? { low: Number(rangeLow) } : {}),
+        ...(rangeHigh !== "" ? { high: Number(rangeHigh) } : {}),
+        ...(rangeText.trim() !== "" ? { text: rangeText.trim() } : {}),
+        ...(rangeRemember ? { remember: true } : {}),
+      });
+      setRangeEditingId(null);
+    } finally {
+      setRangeBusy(false);
+    }
+  };
+
+  const submitKeepBlank = async (obsId: string) => {
+    setRangeBusy(true);
+    try {
+      await onResolveRange({ id: obsId, action: "keep_blank" });
+      setRangeEditingId(null);
+    } finally {
+      setRangeBusy(false);
+    }
+  };
+
+  const submitRematch = async (obsId: string, currentMetric: string) => {
+    if (!rangeRematch || rangeRematch === currentMetric) return;
+    setRangeBusy(true);
+    try {
+      await onResolveRange({ id: obsId, action: "rematch", metricCode: rangeRematch });
+      setRangeEditingId(null);
+    } finally {
+      setRangeBusy(false);
+    }
+  };
 
   const startEditing = (obs: (typeof observations)[number]) => {
     setEditingId(obs.id);
@@ -800,6 +931,11 @@ function CategoryGroup({
             {abnormalCount} 项异常
           </span>
         )}
+        {rangePendingCount > 0 && (
+          <span className="text-[11px] font-medium text-amber-600 font-mono">
+            {rangePendingCount} 项区间待定
+          </span>
+        )}
       </div>
 
       <div className="card">
@@ -827,7 +963,10 @@ function CategoryGroup({
             obs.status === "confirmed" || obs.status === "corrected";
           const isPending = obs.status === "extracted";
           const isFlagged = obs.status === "flagged";
+          const isRangePending = obs.status === "range_pending";
           const isEditing = editingId === obs.id;
+          const isRangeEditing = rangeEditingId === obs.id;
+          const gate = readGate(obs.metadataJson);
 
           // 显示优先级：识别原文 > 未识别项目 > 字典中文名
           const displayName = obs.originalValueText?.trim()
@@ -858,6 +997,14 @@ function CategoryGroup({
                       未匹配
                     </span>
                   )}
+                  {isRangePending && (
+                    <span
+                      className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+                      title={gate.reason ?? "参考区间无法确定，需人工确认"}
+                    >
+                      区间待定
+                    </span>
+                  )}
                 </div>
 
                 {/* Date */}
@@ -886,12 +1033,18 @@ function CategoryGroup({
                   )}
                 </div>
 
-                {/* Reference range */}
+                {/* Reference range：待定行不再只显示一个 —，加琥珀圆点并用 title 说明原因 */}
                 <div className="text-xs text-neutral-400 font-mono">
                   {formatRange(
                     obs.referenceRangeLow,
                     obs.referenceRangeHigh,
                     obs.unit,
+                  )}
+                  {isRangePending && (
+                    <span
+                      className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle"
+                      title={gate.reason ?? "参考区间无法确定"}
+                    />
                   )}
                 </div>
 
@@ -948,6 +1101,16 @@ function CategoryGroup({
                       title={obs.correctionNote ?? undefined}
                     >
                       手动匹配
+                    </button>
+                  ) : isRangePending ? (
+                    <button
+                      onClick={() =>
+                        isRangeEditing ? setRangeEditingId(null) : startRangeEditing(obs)
+                      }
+                      className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 transition-colors hover:bg-amber-100 font-mono"
+                      title={gate.reason ?? "处理区间待定"}
+                    >
+                      {isRangeEditing ? "收起" : "处理"}
                     </button>
                   ) : null}
                 </div>
@@ -1023,6 +1186,110 @@ function CategoryGroup({
                         保存
                       </button>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 区间待定处理表单（spec 21 §4.5-3）：三个出口都在这里，
+                  不另开弹窗——沿用本页已验证可用的行内展开模式 */}
+              {isRangeEditing && (
+                <div className="border-b border-neutral-100 bg-amber-50/50 px-5 py-3">
+                  <div className="mb-2.5 flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                    <p className="text-[12px] leading-5 text-amber-800">
+                      {gate.reason ?? "该行的参考区间无法确定，需人工确认"}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-end gap-3">
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-neutral-400 font-mono">
+                        下限
+                      </span>
+                      <input
+                        type="number"
+                        value={rangeLow}
+                        onChange={(e) => setRangeLow(e.target.value)}
+                        placeholder="可留空"
+                        className={cn(inputClass, "w-24")}
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-neutral-400 font-mono">
+                        上限
+                      </span>
+                      <input
+                        type="number"
+                        value={rangeHigh}
+                        onChange={(e) => setRangeHigh(e.target.value)}
+                        placeholder="可留空"
+                        className={cn(inputClass, "w-24")}
+                      />
+                    </label>
+                    <label className="flex min-w-[160px] flex-1 flex-col gap-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-neutral-400 font-mono">
+                        区间原文（可选）
+                      </span>
+                      <input
+                        type="text"
+                        value={rangeText}
+                        onChange={(e) => setRangeText(e.target.value)}
+                        placeholder="如 41~73"
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="flex items-center gap-1.5 pb-2.5 text-[11px] text-neutral-600">
+                      <input
+                        type="checkbox"
+                        checked={rangeRemember}
+                        onChange={(e) => setRangeRemember(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-neutral-300 text-accent-600 focus:ring-accent-200"
+                      />
+                      记住此区间
+                      <span className="text-neutral-400">（同单位下次自动放行）</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => submitKeepBlank(obs.id)}
+                        disabled={rangeBusy}
+                        className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-[13px] font-medium text-neutral-600 transition-colors hover:bg-neutral-50 disabled:opacity-50"
+                        title="这个值可信，但区间确实无从确定"
+                      >
+                        确认无区间
+                      </button>
+                      <button
+                        onClick={() => submitRangeSet(obs.id)}
+                        disabled={rangeBusy || !hasRangeInput}
+                        className="rounded-lg bg-accent-600 px-4 py-2 text-[13px] font-medium text-white shadow-sm transition-colors hover:bg-accent-700 disabled:opacity-50"
+                      >
+                        保存区间
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-amber-100 pt-3">
+                    <label className="flex min-w-[220px] flex-1 flex-col gap-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-neutral-400 font-mono">
+                        其实不是这个指标？改挂
+                      </span>
+                      <select
+                        value={rangeRematch}
+                        onChange={(e) => setRangeRematch(e.target.value)}
+                        className={inputClass}
+                      >
+                        <option value="">请选择指标</option>
+                        {Array.from(metricNameMap ?? new Map()).map(([metricCode, name]) => (
+                          <option key={metricCode} value={metricCode}>{name} ({metricCode})</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      onClick={() => submitRematch(obs.id, obs.metricCode)}
+                      disabled={rangeBusy || !rangeRematch || rangeRematch === obs.metricCode}
+                      className="rounded-lg border border-amber-300 bg-white px-4 py-2 text-[13px] font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      改挂并重算区间
+                    </button>
                   </div>
                 </div>
               )}
