@@ -1,11 +1,15 @@
 import { getDb } from '@openvitals/database/client';
 import type { Database } from '@openvitals/database/client';
-import { importJobs, metricDefinitions, unitConversions, referenceRanges, users, profiles } from '@openvitals/database';
+import { importJobs, metricDefinitions, unitConversions } from '@openvitals/database';
 import { eq } from 'drizzle-orm';
 import type { WorkflowContext } from '../workflow';
 import type { RawExtraction, NormalizationResult, MetricDefinition } from '@openvitals/ingestion';
 import { normalizeExtractions, matchMetric, cleanForMatch } from '@openvitals/ingestion';
-import type { UserDemographics, DemographicRange } from '@openvitals/ingestion';
+import {
+  buildMetricDefinitions,
+  loadDemographicsForJob,
+  loadReferenceContext,
+} from '../lib/reference-context';
 
 /**
  * 自学习条目 id 后缀：FNV-1a 32-bit → base36。
@@ -166,85 +170,13 @@ export async function normalize(
 
   console.log(`[normalize] Normalizing ${extractions.length} extractions for job=${ctx.importJobId}`);
 
-  // Fetch metric definitions from database
-  const metrics = await db.select().from(metricDefinitions);
-  const conversions = await db.select().from(unitConversions);
-
-  // Fetch reference ranges and group by metric code
-  const ranges = await db.select().from(referenceRanges);
-  const rangesByMetric = new Map<string, DemographicRange[]>();
-  for (const r of ranges) {
-    const existing = rangesByMetric.get(r.metricCode) ?? [];
-    existing.push({
-      sex: r.sex,
-      ageMin: r.ageMin,
-      ageMax: r.ageMax,
-      rangeLow: r.rangeLow,
-      rangeHigh: r.rangeHigh,
-      // spec 19：NULL=字典基准行；非 NULL=学习行（互认标识/检验科区间，Priority-2a 单位匹配）
-      unit: r.unit ?? null,
-      // spec 21（S0b）：来源等级与冲突标定——2a 不再按 range_low 任意取首行
-      sourceTier: r.sourceTier ?? null,
-      conflictStatus: r.conflictStatus ?? null,
-    });
-    rangesByMetric.set(r.metricCode, existing);
-  }
-
-  // 人口学信息取自**本次任务所属档案**，不是账号本人：
-  // 一个账号下有多个档案（本人/家人），血常规、胆红素、ALP 的参考区间按性别/年龄分档，
-  // 用账号性别会把「刘丙友（男）」的报告套成「吴菊兰（女）」的区间，反向也一样。
-  // 档案未填性别/生日时，才回退到账号（保持旧行为，不至于退化成「无人区」）。
-  const [job] = await db
-    .select({ profileId: importJobs.profileId })
-    .from(importJobs)
-    .where(eq(importJobs.id, ctx.importJobId))
-    .limit(1);
-
-  const [profile] = job?.profileId
-    ? await db
-        .select({ gender: profiles.gender, birthDate: profiles.birthDate })
-        .from(profiles)
-        .where(eq(profiles.id, job.profileId))
-        .limit(1)
-    : [];
-
-  const [user] = await db
-    .select({ dateOfBirth: users.dateOfBirth, biologicalSex: users.biologicalSex })
-    .from(users)
-    .where(eq(users.id, ctx.userId))
-    .limit(1);
-
-  const sex = profile?.gender ?? user?.biologicalSex ?? null;
-  const birthDate = profile?.birthDate ?? user?.dateOfBirth ?? null;
-
-  let demographics: UserDemographics | null = null;
-  if (sex !== null || birthDate !== null) {
-    let ageInYears: number | null = null;
-    if (birthDate) {
-      const dob = new Date(birthDate);
-      const now = new Date();
-      ageInYears = now.getFullYear() - dob.getFullYear();
-      const monthDiff = now.getMonth() - dob.getMonth();
-      if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) {
-        ageInYears--;
-      }
-    }
-    demographics = { sex, ageInYears };
-  }
-
-  const metricDefs: MetricDefinition[] = metrics.map((m) => ({
-    id: m.id,
-    name: m.name,
-    category: m.category,
-    unit: m.unit,
-    aliases: (m.aliases as string[]) ?? [],
-    referenceRangeLow: m.referenceRangeLow,
-    referenceRangeHigh: m.referenceRangeHigh,
-    sourceTier: m.sourceTier ?? null,
-    // spec 21（S1）：定性/无量纲判据，决定是否进门禁
-    unitKind: m.unitKind ?? null,
-    demographicRanges: rangesByMetric.get(m.id),
-  }));
+  // 字典 + 区间 + 人口学：与区间重算（recompute）共用同一份装载逻辑
+  // （spec 21 S2，见 lib/reference-context.ts）
+  const [{ rangesByMetric, metricDefs }, conversions, demographics] = await Promise.all([
+    loadReferenceContext(db),
+    db.select().from(unitConversions),
+    loadDemographicsForJob(db, { userId: ctx.userId, importJobId: ctx.importJobId }),
+  ]);
 
   const unitConvs = conversions.map((c) => ({
     fromUnit: c.fromUnit,
@@ -268,18 +200,7 @@ export async function normalize(
 
     // 重新查全量字典，第二遍重跑：新条目/新别名即可命中
     const refreshed = await db.select().from(metricDefinitions);
-    const defs2: MetricDefinition[] = refreshed.map((m) => ({
-      id: m.id,
-      name: m.name,
-      category: m.category,
-      unit: m.unit,
-      aliases: (m.aliases as string[]) ?? [],
-      referenceRangeLow: m.referenceRangeLow,
-      referenceRangeHigh: m.referenceRangeHigh,
-      sourceTier: m.sourceTier ?? null,
-      unitKind: m.unitKind ?? null,
-      demographicRanges: rangesByMetric.get(m.id),
-    }));
+    const defs2 = buildMetricDefinitions(refreshed, rangesByMetric);
     result = normalizeExtractions(extractions, defs2, unitConvs, 0.85, demographics);
     console.log(
       `[normalize] After self-learning: ${result.normalized.length} normalized, ${result.flagged.length} flagged`,
