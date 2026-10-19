@@ -181,7 +181,17 @@ async function main() {
   const rangesByMetric = new Map<string, DemographicRange[]>();
   for (const r of ranges) {
     const list = rangesByMetric.get(r.metricCode) ?? [];
-    list.push({ sex: r.sex, ageMin: r.ageMin, ageMax: r.ageMax, rangeLow: r.rangeLow, rangeHigh: r.rangeHigh, unit: r.unit ?? null });
+    list.push({
+      sex: r.sex,
+      ageMin: r.ageMin,
+      ageMax: r.ageMax,
+      rangeLow: r.rangeLow,
+      rangeHigh: r.rangeHigh,
+      unit: r.unit ?? null,
+      // spec 21（S0b）：来源等级与冲突标定，避免手动重算退回「学习行无条件优先」
+      sourceTier: r.sourceTier ?? null,
+      conflictStatus: r.conflictStatus ?? null,
+    });
     rangesByMetric.set(r.metricCode, list);
   }
   const metricDefs = metrics.map((m) => ({
@@ -192,6 +202,7 @@ async function main() {
     aliases: (m.aliases as string[]) ?? [],
     referenceRangeLow: m.referenceRangeLow,
     referenceRangeHigh: m.referenceRangeHigh,
+    sourceTier: m.sourceTier ?? null,
     demographicRanges: rangesByMetric.get(m.id),
   }));
   const unitConvs = conversions.map((c) => ({

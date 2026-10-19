@@ -15,6 +15,13 @@ export interface DemographicRange {
    * source 为互认标识如「陕HR」或「检验科区间」）。
    */
   unit: string | null;
+  /**
+   * spec 21（S0a）：来源等级。用于替代「按 range_low 升序取首行」的任意选择——
+   * 国标优先于单家医院学习行；同等级多行冲突时标 conflicted 并回落下一等级。
+   */
+  sourceTier?: string | null;
+  /** spec 21（S0b）：已被标定冲突的行不参与自动择一 */
+  conflictStatus?: string | null;
 }
 
 export interface UserDemographics {
@@ -30,7 +37,38 @@ export interface MetricDefinition {
   aliases: string[];
   referenceRangeLow: number | null;
   referenceRangeHigh: number | null;
+  /** spec 21（S0a）：字典条目自身的来源等级（从其区间行继承最高等级） */
+  sourceTier?: string | null;
   demographicRanges?: DemographicRange[];
+}
+
+/**
+ * 来源等级（spec 21 §4.12.3 机制 3）。
+ * 数字越小越可信；unverified 排最后（可用，但不允许覆盖任何有来源的行）。
+ */
+export const SOURCE_TIER_RANK: Record<string, number> = {
+  national_standard: 1,
+  guideline: 2,
+  textbook: 3,
+  instrument: 4,
+  lab_learned: 5,
+  user_input: 6,
+  unverified: 9,
+};
+
+function tierRank(tier: string | null | undefined): number {
+  return SOURCE_TIER_RANK[tier ?? 'unverified'] ?? 9;
+}
+
+/** 两个区间是否「实质分歧」：任一侧边界相对差 > 20%（0 与 0 视为一致） */
+function divergesMoreThan20Pct(a: { low: number | null; high: number | null }, b: { low: number | null; high: number | null }): boolean {
+  const oneSide = (x: number | null, y: number | null): boolean => {
+    if (x === null || y === null) return false;
+    const base = Math.max(Math.abs(x), Math.abs(y));
+    if (base === 0) return false;
+    return Math.abs(x - y) > 0.2 * base;
+  };
+  return oneSide(a.low, b.low) || oneSide(a.high, b.high);
 }
 
 export interface UnitConversion {
@@ -294,14 +332,24 @@ export interface ResolvedRange {
   /** 是否被区间对应性门禁拦下（仅 fallback 路径可能为 true） */
   gated?: boolean;
   gateReason?: string;
+  /** 实际采用的来源等级（spec 21 · S0b 诊断用） */
+  sourceTier?: string;
+  /** 同等级多来源区间冲突，已回落或放弃自动择一 */
+  conflicted?: boolean;
 }
 
 /**
  * Resolve reference range with priority:
  * 1. Per-observation range from the extraction —— 报告原文区间，**永不门禁**
- * 2a. 学习行（unit=观测单位，互认标识如陕HR / 检验科区间）—— 用户确认过的检验科区间，直接采用、不走门禁（spec 19）
+ * 2a. 学习行（unit=观测单位，互认标识如陕HR / 检验科区间）
  * 2b. Demographic-matched range from reference_ranges table ┐
  * 3. Metric definition fallback                            ┘ 走区间对应性门禁（spec 13 §五）
+ *
+ * spec 21（S0b）改了 2a/2b 的优先关系：
+ *   旧实现「学习行无条件优先于国标」是当前生产库的误报源——creatinine 学习行
+ *   41~73 是女性区间，男性 80 µmol/L 会被判「偏高」（国标 57~97 为正常）。
+ *   新实现按 source_tier 升序取最高等级：国标 > 指南 > 教材/仪器 > 学习行 > 未核验。
+ *   同等级多行且区间差异 >20% → 标 conflicted，不自动择一（回落到下一等级）。
  *
  * 门禁只作用于 2b/3：字典/人口学区间的数值是在 `metric.unit` 下写的，
  * 若观测单位与之不一致（或数值量级带对不上），那串数字必然错位，
@@ -320,61 +368,112 @@ export function resolveReferenceRange(
     };
   }
 
-  // Priority 2a: 学习行（spec 19 §3.3）——unit 与观测单位一致的学习行
-  // 直接采用、不走门禁。学习行来自用户确认过的报告原文区间（如肌酐 μmol/L 41~73），
-  // 数值与单位天然同源，不存在「错配」问题；多行（不同检验科）时按区间下限
-  // 稳定排序取首行，保证确定性。
-  if (
-    extraction.unit != null &&
-    metric.demographicRanges &&
-    metric.demographicRanges.length > 0
-  ) {
-    const obsUnit = canonicalUnit(extraction.unit);
-    const learned = metric.demographicRanges
-      .filter(
-        (r) =>
-          r.unit != null &&
-          obsUnit != null &&
-          canonicalUnit(r.unit) === obsUnit &&
-          // 学习行若标了性别，只能用于同性别档案（否则男性报告会套用女性区间）
-          (r.sex == null ||
-            demographics?.sex == null ||
-            r.sex === demographics.sex),
-      )
-      .sort((a, b) => (a.rangeLow ?? -Infinity) - (b.rangeLow ?? -Infinity));
-    if (learned.length > 0) {
-      return { low: learned[0]!.rangeLow, high: learned[0]!.rangeHigh };
+  interface Candidate {
+    low: number | null;
+    high: number | null;
+    tier: string;
+  }
+
+  const obsUnit = canonicalUnit(extraction.unit);
+  const candidates: Candidate[] = [];
+
+  // Priority 2a: 学习行 —— 单位与观测单位一致，且人口学匹配
+  if (obsUnit !== null && metric.demographicRanges && metric.demographicRanges.length > 0) {
+    for (const r of metric.demographicRanges) {
+      if (r.unit == null) continue;
+      if (canonicalUnit(r.unit) !== obsUnit) continue;
+      // 学习行若标了性别，只能用于同性别档案；档案性别未知时不排除（保持旧行为）
+      if (r.sex != null && demographics?.sex != null && r.sex !== demographics.sex) continue;
+      // 年龄：学习行标了年龄带就只用于带内（此前 2a 完全没有年龄判断）
+      if (demographics?.ageInYears != null) {
+        if (r.ageMin != null && demographics.ageInYears < r.ageMin) continue;
+        if (r.ageMax != null && demographics.ageInYears > r.ageMax) continue;
+      }
+      // 已标定冲突的学习行不参与自动择一（spec 21 §4.12.5 约束 5）
+      if (r.conflictStatus === 'conflicted') continue;
+      candidates.push({ low: r.rangeLow, high: r.rangeHigh, tier: r.sourceTier ?? 'lab_learned' });
     }
   }
 
-  // Priority 2b: demographic match（国标/通行行，unit NULL；走门禁）
-  let fallback: { low: number | null; high: number | null } | null = null;
-  if (demographics && metric.demographicRanges && metric.demographicRanges.length > 0) {
-    const match = findBestDemographicRange(metric.demographicRanges, demographics);
-    if (match) fallback = { low: match.rangeLow, high: match.rangeHigh };
+  // Priority 2b / 3: 国标人口学区间，其次字典基准列
+  const demo =
+    demographics && metric.demographicRanges && metric.demographicRanges.length > 0
+      ? findBestDemographicRange(metric.demographicRanges, demographics)
+      : null;
+
+  const base: Candidate | null = demo
+    ? { low: demo.rangeLow, high: demo.rangeHigh, tier: demo.sourceTier ?? 'unverified' }
+    : metric.referenceRangeLow !== null || metric.referenceRangeHigh !== null
+      ? { low: metric.referenceRangeLow, high: metric.referenceRangeHigh, tier: metric.sourceTier ?? 'unverified' }
+      : null;
+
+  let baseGateReason: string | null = null;
+  if (base) {
+    // (1) 单位一致性：fallback 数值是在字典单位下写的，观测单位必须一致
+    const unitGate = checkUnitConsistency(extraction.unit, metric.unit, metric.id);
+    if (!unitGate.ok) {
+      baseGateReason = unitGate.reason ?? '观测单位与字典单位不一致';
+    } else {
+      // (2) §6.1 数值量级带：单位相同但量级仍旧不对（正交第二道网）
+      const bandGate = checkMagnitudeBand(metric.id, extraction.unit, base.low, base.high);
+      if (!bandGate.ok) {
+        baseGateReason = bandGate.reason ?? 'fallback 区间量级与观测值不符';
+      } else {
+        candidates.push(base);
+      }
+    }
   }
 
-  // Priority 3: metric definition fallback
-  if (!fallback) {
-    fallback = { low: metric.referenceRangeLow, high: metric.referenceRangeHigh };
+  // 无任何候选：区分「本来无区间」与「有区间但被门禁拦下」
+  if (candidates.length === 0) {
+    if (baseGateReason !== null) {
+      return { low: null, high: null, gated: true, gateReason: baseGateReason };
+    }
+    return { low: null, high: null };
   }
 
-  // 无区间可用 → 不存在「错配」问题，无需门禁
-  if (fallback.low === null && fallback.high === null) return fallback;
+  // ── 按来源等级裁决（替代旧的「按 range_low 升序取首行」）───────────────────
+  const sorted = [...candidates].sort((a, b) => tierRank(a.tier) - tierRank(b.tier));
+  let conflicted = false;
+  let index = 0;
+  while (index < sorted.length) {
+    const tier = sorted[index]!.tier;
+    const group: Candidate[] = [];
+    while (index < sorted.length && sorted[index]!.tier === tier) {
+      group.push(sorted[index]!);
+      index += 1;
+    }
 
-  // ── 区间对应性门禁 ──────────────────────────────────────────────────────────
-  // (1) 单位一致性：fallback 数值是在字典单位下写的，观测单位必须一致
-  const unitGate = checkUnitConsistency(extraction.unit, metric.unit, metric.id);
-  if (!unitGate.ok) {
-    return { low: null, high: null, gated: true, gateReason: unitGate.reason };
-  }
-  // (2) §6.1 数值量级带：单位相同但量级仍旧不对（正交第二道网）
-  const bandGate = checkMagnitudeBand(metric.id, extraction.unit, fallback.low, fallback.high);
-  if (!bandGate.ok) {
-    return { low: null, high: null, gated: true, gateReason: bandGate.reason };
+    if (group.length === 1) {
+      return {
+        low: group[0]!.low,
+        high: group[0]!.high,
+        sourceTier: tier,
+        ...(conflicted ? { conflicted: true } : {}),
+      };
+    }
+
+    const clash = group.some((a, i) => group.slice(i + 1).some((b) => divergesMoreThan20Pct(a, b)));
+    if (!clash) {
+      return {
+        low: group[0]!.low,
+        high: group[0]!.high,
+        sourceTier: tier,
+        ...(conflicted ? { conflicted: true } : {}),
+      };
+    }
+
+    // 同等级多来源区间实质分歧 → 不自动择一，回落下一等级
+    conflicted = true;
   }
 
-  return fallback;
+  // 所有等级都冲突：宁可留空，也不给出一个任意挑出来的区间
+  return {
+    low: null,
+    high: null,
+    conflicted: true,
+    gateReason: '同等级多来源区间冲突且无更高等级可用，已交人工确认',
+  };
 }
 
 export function normalizeExtractions(

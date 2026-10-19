@@ -183,6 +183,9 @@ export async function normalize(
       rangeHigh: r.rangeHigh,
       // spec 19：NULL=字典基准行；非 NULL=学习行（互认标识/检验科区间，Priority-2a 单位匹配）
       unit: r.unit ?? null,
+      // spec 21（S0b）：来源等级与冲突标定——2a 不再按 range_low 任意取首行
+      sourceTier: r.sourceTier ?? null,
+      conflictStatus: r.conflictStatus ?? null,
     });
     rangesByMetric.set(r.metricCode, existing);
   }
@@ -237,6 +240,7 @@ export async function normalize(
     aliases: (m.aliases as string[]) ?? [],
     referenceRangeLow: m.referenceRangeLow,
     referenceRangeHigh: m.referenceRangeHigh,
+    sourceTier: m.sourceTier ?? null,
     demographicRanges: rangesByMetric.get(m.id),
   }));
 
@@ -270,6 +274,7 @@ export async function normalize(
       aliases: (m.aliases as string[]) ?? [],
       referenceRangeLow: m.referenceRangeLow,
       referenceRangeHigh: m.referenceRangeHigh,
+      sourceTier: m.sourceTier ?? null,
       demographicRanges: rangesByMetric.get(m.id),
     }));
     result = normalizeExtractions(extractions, defs2, unitConvs, 0.85, demographics);
