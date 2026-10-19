@@ -5,6 +5,8 @@ export {
   CATEGORY_GROUPS,
 } from './categories';
 
+export { canonicalUnit } from './units';
+
 export type {
   ObservationStatus,
   ImportStatus,

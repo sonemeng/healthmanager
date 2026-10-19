@@ -12,38 +12,10 @@
  */
 
 /** 把单位拼写归一到规范形；无法识别时返回去空白后的原文；空/纯空白返回 null */
-export function canonicalUnit(raw: string | null | undefined): string | null {
-  if (raw == null) return null;
-  let u = raw.trim();
-  if (!u) return null;
-
-  // 1) 微符号统一为 µ (U+00B5)：U+03BC(Greek mu) / U+00B5(micro sign) / 误用字符
-  u = u.replace(/[\u03BC\u00B5\uFB00]/g, '\u00B5');
-  // 全角斜杠 → 半角
-  u = u.replace(/\uFF0F/g, '/');
-
-  // 2) 精确进制记号等价（数值完全不变，仅计数写法不同）
-  //    1 K/µL = 1000/µL = 10^3 × 10^6/L = 10^9/L
-  //    1 M/µL = 10^6/µL = 10^6 × 10^6/L = 10^12/L
-  u = u.replace(/^K\s*\/\s*[uµ]L$/i, '10^9/L');
-  u = u.replace(/^M\s*\/\s*[uµ]L$/i, '10^12/L');
-
-  // 3) 分母/分子大小写归一（R5：泛化到任意分子，避免 pg/ml vs pg/mL、ml/min vs mL/min 被误判为不同单位）
-  u = u.replace(/^u\s*mol\s*\/\s*l$/i, '\u00B5mol/L'); // umol/l、umol/L
-  u = u.replace(/\u00B5mol\s*\/\s*l$/i, '\u00B5mol/L'); // µmol/l
-  u = u.replace(/\/\s*l$/i, '/L'); // mg/l → mg/L、mmol/l → mmol/L
-  u = u.replace(/\/\s*ml$/i, '/mL'); // pg/ml → pg/mL、ng/ml → ng/mL
-  u = u.replace(/\/\s*dl$/i, '/dL'); // mg/dl → mg/dL、g/dl → g/dL
-  u = u.replace(/\/\s*ul$/i, '/\u00B5L'); // /ul → /µL
-  u = u.replace(/^ml\s*\//i, 'mL/'); // ml/min/1.73m2 → mL/min/1.73m2
-  u = u.replace(/^u\s*\/\s*l$/i, 'U/L'); // u/l → U/L
-  u = u.replace(/^u\s*\/\s*ml$/i, 'U/mL');
-
-  // 4) 去内部空白
-  u = u.replace(/\s+/g, '');
-
-  return u || null;
-}
+// 唯一实现已移到 @openvitals/common（apps/web 写学习行时也要用同一份，而 web 不依赖本包）。
+// 这里 re-export，保持 `from './units'` 的既有 import 不变。
+import { canonicalUnit } from '@openvitals/common';
+export { canonicalUnit };
 
 export interface GateResult {
   ok: boolean;
@@ -146,7 +118,7 @@ export const MAGNITUDE_BANDS: Record<string, MagnitudeBand> = {
   'ggt@U/L': { low: 7, high: 45, note: '报告原文 7-45' },
   'globulin@g/L': { low: 20, high: 40, note: '报告原文 20-40' },
   'glucose@mmol/L': { low: 3.9, high: 6.1, note: '报告原文 空腹 3.9-6.1' },
-  'hemoglobin@g/L': { low: 115, high: 150, note: '报告原文 115-150（排除挂错的 316-354=MCHC）' },
+  'hemoglobin@g/L': { low: 115, high: 175, note: '国标 男 130~175 / 女 115~150（原带 115~150 只覆盖女性报告，误杀男性基准列）' },
   'hs_crp@mg/L': { low: 0, high: 10, note: '报告原文 0-10' },
   'lymphocytes_pct@%': { low: 17, high: 50, note: '报告原文 17-50' },
   'magnesium@mmol/L': { low: 0.75, high: 1.02, note: '报告原文 0.75-1.02' },
