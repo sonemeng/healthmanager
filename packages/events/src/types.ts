@@ -24,6 +24,24 @@ export type ObservationConfirmedEvent = DomainEvent<'observation.confirmed', {
   observationId: string;
 }>;
 
+/**
+ * 区间待定被处理（spec 21 S2）。
+ * action：keep_blank（确认无区间）/ set（手工补区间）/ rematch（改挂指标）/ keep_blank_batch（批量）。
+ */
+export type ObservationRangeResolvedEvent = DomainEvent<'observation.range_resolved', {
+  observationId?: string;
+  importJobId?: string;
+  action: 'keep_blank' | 'set' | 'rematch' | 'keep_blank_batch';
+  metricCode?: string;
+  from?: string | null;
+  to?: string;
+  rangeLow?: number | null;
+  rangeHigh?: number | null;
+  remembered?: boolean;
+  recomputed?: boolean;
+  count?: number;
+}>;
+
 export type ImportStartedEvent = DomainEvent<'import.started', {
   importJobId: string;
   artifactId: string;
@@ -69,6 +87,7 @@ export type AppEvent =
   | ObservationCreatedEvent
   | ObservationCorrectedEvent
   | ObservationConfirmedEvent
+  | ObservationRangeResolvedEvent
   | ImportStartedEvent
   | ImportCompletedEvent
   | ImportFailedEvent

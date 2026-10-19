@@ -124,6 +124,11 @@ async function ensureLearnedRange(
     rangeHigh: number | null;
     metadataJson: unknown;
     profileId: string | null;
+    /**
+     * 来源覆盖（spec 21 S2）：人手填的区间不是「检验科区间」，标成后者等于给
+     * 自填值套上化验单的可信度。默认按互认标识/检验科区间推导。
+     */
+    sourceOverride?: { source: string; tier: string };
   },
 ): Promise<void> {
   try {
@@ -149,7 +154,9 @@ async function ensureLearnedRange(
     // 互认标识（如「陕HR」）：只收非空字符串，其余一律兜底专业口径
     const mark = (metadataJson as { interopMark?: unknown } | null)?.interopMark;
     const source =
-      typeof mark === 'string' && mark.trim() !== '' ? mark.trim() : '检验科区间';
+      row.sourceOverride?.source ??
+      (typeof mark === 'string' && mark.trim() !== '' ? mark.trim() : '检验科区间');
+    const sourceTier = row.sourceOverride?.tier ?? 'lab_learned';
 
     const sexCond = sex === null ? isNull(referenceRanges.sex) : eq(referenceRanges.sex, sex);
     const lowCond =
@@ -228,7 +235,7 @@ async function ensureLearnedRange(
         rangeText: null,
         source,
         unit,
-        sourceTier: 'lab_learned',
+        sourceTier,
         // 约束 3：必须可溯源（点开能回到原报告）
         observationId,
       })
@@ -237,6 +244,111 @@ async function ensureLearnedRange(
     await markPromotionCandidate(db, { metricCode, unit, rangeLow, rangeHigh, sex });
   } catch (err) {
     console.error('[observations] ensureLearnedRange failed:', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * 任务收尾判定（spec 21 §4.3）：只要还有 extracted / flagged / range_pending，
+ * 任务就不能算完成。漏掉 range_pending 会让用户处理完所有待办后任务永远卡在
+ * review_needed —— 这是 S1 里已经证实过的坑，故收口到唯一实现。
+ */
+async function markJobCompletedIfDone(
+  db: Database,
+  userId: string,
+  jobId: string | null,
+): Promise<void> {
+  if (!jobId) return;
+  const pending = await db
+    .select({ id: observations.id })
+    .from(observations)
+    .where(
+      and(
+        eq(observations.importJobId, jobId),
+        eq(observations.userId, userId),
+        inArray(observations.status, ['extracted', 'flagged', 'range_pending']),
+      ),
+    )
+    .limit(1);
+
+  if (pending.length === 0) {
+    await db
+      .update(importJobs)
+      .set({ status: 'completed', needsReview: false, completedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(importJobs.id, jobId), eq(importJobs.userId, userId)));
+  }
+}
+
+/**
+ * 处理完待办后清理门禁留痕（spec 21 S2）：
+ * gateCode / gateReason 描述的是「此刻待定」，人被处理完再留着就会变成幽灵待办
+ * （实测 5 条历史留痕里 4 条是这种）。改为写一条 rangeResolution 记「谁怎么处理的」。
+ */
+function resolveGateMetadata(
+  metadataJson: unknown,
+  resolution: { action: string; note?: string; remembered?: boolean },
+): Record<string, unknown> | null {
+  const meta = { ...((metadataJson as Record<string, unknown> | null) ?? {}) };
+  delete meta.gateCode;
+  delete meta.gateReason;
+  meta.rangeResolution = {
+    action: resolution.action,
+    at: new Date().toISOString(),
+    ...(resolution.note ? { note: resolution.note } : {}),
+    ...(resolution.remembered ? { remembered: true } : {}),
+  };
+  return meta;
+}
+
+/** 判读：单侧区间只判有界的一侧；无区间返回 null（交给调用方决定保留原值） */
+function computeAbnormal(
+  value: number | null,
+  low: number | null,
+  high: number | null,
+): boolean | null {
+  if (value === null) return null;
+  if (low === null && high === null) return null;
+  return (high !== null && value > high) || (low !== null && value < low);
+}
+
+/**
+ * 让 worker 重算指定行的区间（spec 21 §4.6）。
+ *
+ * 为什么不在这里直接算：`resolveReferenceRange` 在 `@openvitals/ingestion`，
+ * 而 web 不依赖它（加了会把 worker 的编译链拖进纯前端包）。走既有的
+ * worker HTTP 通道（与 triggerWorker 同款）成本最低，且重算逻辑只有一份实现。
+ *
+ * 重算失败**不阻断**用户操作：改挂本身已经落库，行会留在 range_pending，
+ * 下次打开任务（S3 的懒重算）会再算一次。
+ */
+async function requestRangeRecompute(params: {
+  userId: string;
+  observationIds?: string[];
+  importJobId?: string;
+  includeExisting?: boolean;
+}): Promise<{ ok: boolean; error?: string }> {
+  const workerUrl = process.env.RENDER_WORKER_URL ?? 'http://localhost:4000';
+  const webhookSecret = process.env.RENDER_WEBHOOK_SECRET ?? 'dev-secret-change-me';
+
+  try {
+    const response = await fetch(`${workerUrl}/api/ranges/recompute`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${webhookSecret}`,
+      },
+      body: JSON.stringify(params),
+      // 本地回环，但 worker 可能正在跑长任务（解析大文件）——不能无限等
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      return { ok: false, error: `HTTP ${response.status}${body ? `: ${body}` : ''}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[observations] range recompute failed:', message);
+    return { ok: false, error: message };
   }
 }
 
@@ -444,29 +556,7 @@ export const observationsRouter = createRouter({
       });
 
       // Do not complete an import while an unmatched item still needs a user decision.
-      const jobId = result[0]!.importJobId;
-      if (jobId) {
-        const pending = await ctx.db
-          .select({ id: observations.id })
-          .from(observations)
-          .where(
-            and(
-              eq(observations.importJobId, jobId),
-              eq(observations.userId, ctx.userId),
-              // spec 21 §4.3：range_pending 是「区间待定」的待办行，也算未处理完；
-              // 漏掉它任务会永远卡在 review_needed（用户处理完也转不成 completed）。
-              inArray(observations.status, ['extracted', 'flagged', 'range_pending']),
-            ),
-          )
-          .limit(1);
-
-        if (pending.length === 0) {
-          await ctx.db
-            .update(importJobs)
-            .set({ status: 'completed', needsReview: false, completedAt: new Date(), updatedAt: new Date() })
-            .where(and(eq(importJobs.id, jobId), eq(importJobs.userId, ctx.userId)));
-        }
-      }
+      await markJobCompletedIfDone(ctx.db, ctx.userId, result[0]!.importJobId);
 
       emitEvent({
         type: 'observation.confirmed',
@@ -476,6 +566,252 @@ export const observationsRouter = createRouter({
       });
 
       return { success: true };
+    }),
+
+  /**
+   * 处理「区间待定」行（spec 21 §4.4）。三个动作，每个待办都必须有出口：
+   *   keep_blank —— 值可信，但区间确实无从确定 → confirmed，**不写学习行**
+   *   set        —— 手工补区间 → 重算判读 + confirmed；remember 时写学习行
+   *   rematch    —— 其实不是这个指标 → 改挂 + 让 worker 重算区间
+   *
+   * remember 是这套设计的关键收益点：补一次区间，下一份同单位报告走优先级 2a
+   * （学习行，永不门禁），从此不再进队列——形成「拦截 → 一次性人工 → 自动放行」的
+   * 收敛回路，而不是每次都拦。前提写死：只有人手填的才写学习行，绝不从字典区间反推。
+   */
+  resolveRange: protectedProcedure
+    .input(z.object({
+      id: z.string().uuid(),
+      action: z.enum(['keep_blank', 'set', 'rematch']),
+      low: z.number().finite().nullable().optional(),
+      high: z.number().finite().nullable().optional(),
+      text: z.string().max(120).optional(),
+      remember: z.boolean().optional(),
+      metricCode: z.string().min(1).max(50).optional(),
+      note: z.string().max(200).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const [current] = await ctx.db
+        .select()
+        .from(observations)
+        .where(and(eq(observations.id, input.id), eq(observations.userId, ctx.userId)))
+        .limit(1);
+
+      if (!current) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Observation not found' });
+      }
+
+      // 未匹配指标（metricCode='unmatched'）不能直接补区间：既算不出判读，
+      // 也会把区间写进一条名为 unmatched 的指标下。必须先改挂（动作 ③）。
+      if (current.metricCode === 'unmatched' && input.action !== 'rematch') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: '该行还没匹配到指标，请先「改挂」到正确指标再处理区间',
+        });
+      }
+
+      // ── ① 确认无区间 ──────────────────────────────────────────────────────
+      if (input.action === 'keep_blank') {
+        await ctx.db
+          .update(observations)
+          .set({
+            status: 'confirmed',
+            metadataJson: resolveGateMetadata(current.metadataJson, {
+              action: 'keep_blank',
+              note: input.note,
+            }),
+            updatedAt: new Date(),
+          })
+          .where(and(eq(observations.id, current.id), eq(observations.userId, ctx.userId)));
+
+        await markJobCompletedIfDone(ctx.db, ctx.userId, current.importJobId);
+        emitEvent({
+          type: 'observation.range_resolved',
+          payload: { observationId: current.id, action: 'keep_blank', metricCode: current.metricCode },
+          userId: ctx.userId,
+          timestamp: new Date(),
+        });
+        return { success: true, recomputed: true };
+      }
+
+      // ── ② 手工补区间 ──────────────────────────────────────────────────────
+      if (input.action === 'set') {
+        const low = input.low ?? null;
+        const high = input.high ?? null;
+        const text = input.text?.trim() ? input.text.trim() : null;
+
+        if (low === null && high === null && text === null) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: '至少填写下限、上限或区间原文之一',
+          });
+        }
+        if (low !== null && high !== null && low > high) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: '下限不能大于上限' });
+        }
+
+        // 判读按新区间重算（单侧区间只判有界的一侧）；无区间时保留原判读
+        const isAbnormal = computeAbnormal(current.valueNumeric, low, high) ?? current.isAbnormal;
+        const remembered = input.remember === true && (low !== null || high !== null);
+
+        await ctx.db
+          .update(observations)
+          .set({
+            referenceRangeLow: low,
+            referenceRangeHigh: high,
+            referenceRangeText: text,
+            isAbnormal,
+            status: 'confirmed',
+            metadataJson: resolveGateMetadata(current.metadataJson, {
+              action: 'set',
+              note: input.note,
+              remembered,
+            }),
+            updatedAt: new Date(),
+          })
+          .where(and(eq(observations.id, current.id), eq(observations.userId, ctx.userId)));
+
+        if (remembered) {
+          await ensureLearnedRange(ctx.db, {
+            observationId: current.id,
+            metricCode: current.metricCode,
+            unit: current.unit,
+            rangeLow: low,
+            rangeHigh: high,
+            metadataJson: current.metadataJson,
+            profileId: current.profileId,
+            // 人手填的不是化验单印的，来源必须如实标 —— 否则等于自填值冒充检验科口径
+            sourceOverride: { source: '手工补录', tier: 'user_input' },
+          });
+        }
+
+        await markJobCompletedIfDone(ctx.db, ctx.userId, current.importJobId);
+        emitEvent({
+          type: 'observation.range_resolved',
+          payload: {
+            observationId: current.id,
+            action: 'set',
+            metricCode: current.metricCode,
+            rangeLow: low,
+            rangeHigh: high,
+            remembered,
+          },
+          userId: ctx.userId,
+          timestamp: new Date(),
+        });
+        return { success: true, recomputed: true, remembered };
+      }
+
+      // ── ③ 改挂指标 ────────────────────────────────────────────────────────
+      const metricCode = input.metricCode?.trim();
+      if (!metricCode) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '请选择要改挂的指标' });
+      }
+      if (metricCode === current.metricCode) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '所选指标与当前一致，无需改挂' });
+      }
+
+      const [metric] = await ctx.db
+        .select({ id: metricDefinitions.id })
+        .from(metricDefinitions)
+        .where(eq(metricDefinitions.id, metricCode))
+        .limit(1);
+      if (!metric) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '指标不存在' });
+      }
+
+      // 旧区间属于旧指标，必须清空——带着旧指标的区间去判新指标，比没有区间更糟。
+      // 状态先落 range_pending：重算成功由 worker 降级为 extracted（待确认），失败则留在待定。
+      const meta = { ...((current.metadataJson as Record<string, unknown> | null) ?? {}) };
+      delete meta.gateCode;
+      delete meta.gateReason;
+      meta.rangeResolution = {
+        action: 'rematch',
+        at: new Date().toISOString(),
+        from: current.metricCode,
+        to: metricCode,
+        ...(input.note ? { note: input.note } : {}),
+      };
+
+      await ctx.db
+        .update(observations)
+        .set({
+          metricCode,
+          referenceRangeLow: null,
+          referenceRangeHigh: null,
+          referenceRangeText: null,
+          isAbnormal: null,
+          status: 'range_pending',
+          metadataJson: meta,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(observations.id, current.id), eq(observations.userId, ctx.userId)));
+
+      // 重算是「改挂」的必要收尾：不算就等于把一个已知区间待定的行丢回队列。
+      // 失败也不回滚改挂本身（那是用户的判断），行留在 range_pending 等下次重算。
+      const recompute = await requestRangeRecompute({
+        userId: ctx.userId,
+        observationIds: [current.id],
+        includeExisting: true,
+      });
+
+      await markJobCompletedIfDone(ctx.db, ctx.userId, current.importJobId);
+      emitEvent({
+        type: 'observation.range_resolved',
+        payload: {
+          observationId: current.id,
+          action: 'rematch',
+          from: current.metricCode,
+          to: metricCode,
+          recomputed: recompute.ok,
+        },
+        userId: ctx.userId,
+        timestamp: new Date(),
+      });
+
+      return { success: true, recomputed: recompute.ok, recomputeError: recompute.error };
+    }),
+
+  /**
+   * 批量出口（spec 21 §4.5-5）：「全部确认无区间」。
+   * 一份报告真命中 20 条待办时，逐个点会把人逼疯，也会训练出「见待定就点」的条件反射。
+   */
+  resolveAllBlank: protectedProcedure
+    .input(z.object({ importJobId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const rows = await ctx.db
+        .select({ id: observations.id, metadataJson: observations.metadataJson })
+        .from(observations)
+        .where(
+          and(
+            eq(observations.importJobId, input.importJobId),
+            eq(observations.userId, ctx.userId),
+            eq(observations.status, 'range_pending'),
+          ),
+        );
+
+      for (const row of rows) {
+        await ctx.db
+          .update(observations)
+          .set({
+            status: 'confirmed',
+            metadataJson: resolveGateMetadata(row.metadataJson, { action: 'keep_blank_batch' }),
+            updatedAt: new Date(),
+          })
+          .where(and(eq(observations.id, row.id), eq(observations.userId, ctx.userId)));
+      }
+
+      await markJobCompletedIfDone(ctx.db, ctx.userId, input.importJobId);
+
+      if (rows.length > 0) {
+        emitEvent({
+          type: 'observation.range_resolved',
+          payload: { importJobId: input.importJobId, action: 'keep_blank_batch', count: rows.length },
+          userId: ctx.userId,
+          timestamp: new Date(),
+        });
+      }
+
+      return { success: true, resolved: rows.length };
     }),
 
   remove: protectedProcedure
