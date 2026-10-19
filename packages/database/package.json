@@ -14,6 +14,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx src/seed/run.ts",
     "db:studio": "drizzle-kit studio",
+    "audit:metrics": "tsx scripts/audit-metric-dictionary.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

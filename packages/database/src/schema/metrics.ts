@@ -9,9 +9,11 @@ import {
   unique,
   index,
   timestamp,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { users } from "./users";
 import { profiles } from "./profiles";
+import { observations } from "./observations";
 
 // ── Metric Definitions ─────────────────────────────────────────────────────────
 
@@ -29,6 +31,13 @@ export const metricDefinitions = pgTable("metric_definitions", {
   description: text("description"),
   displayPrecision: integer("display_precision"),
   sortOrder: integer("sort_order").default(0),
+  // provenance（spec 21 · S0a）：来源等级 / 可追溯引用 / 人工核验记录 / 单位性质。
+  // source_tier 缺失时按 unverified 处理（可用，但优先级最低、UI 显示「来源待补」）。
+  sourceTier: varchar("source_tier", { length: 20 }),
+  citation: text("citation"),
+  verifiedAt: timestamp("verified_at"),
+  verifiedBy: varchar("verified_by", { length: 100 }),
+  unitKind: varchar("unit_kind", { length: 20 }),
 });
 
 // ── Reference Ranges ──────────────────────────────────────────────────────────
@@ -54,6 +63,20 @@ export const referenceRanges = pgTable(
     rangeText: text("range_text"),
     source: varchar("source", { length: 100 }),
     unit: varchar("unit", { length: 50 }),
+    // provenance（spec 21 · S0a/S0b）
+    sourceTier: varchar("source_tier", { length: 20 }),
+    citation: text("citation"),
+    verifiedAt: timestamp("verified_at"),
+    verifiedBy: varchar("verified_by", { length: 100 }),
+    // 学习行溯源：这条区间来自哪条观测（点开可回到原报告）
+    observationId: uuid("observation_id").references(() => observations.id, {
+      onDelete: "set null",
+    }),
+    // 冲突标定：同 (指标, 单位, 性别) 多来源区间差异 >20%，不自动择一
+    conflictStatus: varchar("conflict_status", { length: 20 }),
+    conflictNote: text("conflict_note"),
+    // 晋升通道：同 key 有 ≥3 份独立报告区间一致 → 提为字典候选，人工批准后升 textbook
+    promotionStatus: varchar("promotion_status", { length: 20 }),
   },
   (table) => [
     unique("reference_ranges_metric_sex_age_unit_uniq")
@@ -68,6 +91,7 @@ export const referenceRanges = pgTable(
       )
       .nullsNotDistinct(),
     index("reference_ranges_metric_code_idx").on(table.metricCode),
+    index("reference_ranges_observation_idx").on(table.observationId),
   ],
 );
 
