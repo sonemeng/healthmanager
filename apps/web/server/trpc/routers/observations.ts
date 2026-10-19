@@ -17,6 +17,7 @@ import {
 } from '@openvitals/database';
 import { emitEvent } from '@openvitals/events';
 import { getActiveProfileId } from '../active-profile';
+import { requestRangeRecompute } from '../../lib/worker-client';
 import {
   groupRowsByDay,
   buildBatches,
@@ -308,48 +309,6 @@ function computeAbnormal(
   if (value === null) return null;
   if (low === null && high === null) return null;
   return (high !== null && value > high) || (low !== null && value < low);
-}
-
-/**
- * 让 worker 重算指定行的区间（spec 21 §4.6）。
- *
- * 为什么不在这里直接算：`resolveReferenceRange` 在 `@openvitals/ingestion`，
- * 而 web 不依赖它（加了会把 worker 的编译链拖进纯前端包）。走既有的
- * worker HTTP 通道（与 triggerWorker 同款）成本最低，且重算逻辑只有一份实现。
- *
- * 重算失败**不阻断**用户操作：改挂本身已经落库，行会留在 range_pending，
- * 下次打开任务（S3 的懒重算）会再算一次。
- */
-async function requestRangeRecompute(params: {
-  userId: string;
-  observationIds?: string[];
-  importJobId?: string;
-  includeExisting?: boolean;
-}): Promise<{ ok: boolean; error?: string }> {
-  const workerUrl = process.env.RENDER_WORKER_URL ?? 'http://localhost:4000';
-  const webhookSecret = process.env.RENDER_WEBHOOK_SECRET ?? 'dev-secret-change-me';
-
-  try {
-    const response = await fetch(`${workerUrl}/api/ranges/recompute`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${webhookSecret}`,
-      },
-      body: JSON.stringify(params),
-      // 本地回环，但 worker 可能正在跑长任务（解析大文件）——不能无限等
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      return { ok: false, error: `HTTP ${response.status}${body ? `: ${body}` : ''}` };
-    }
-    return { ok: true };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('[observations] range recompute failed:', message);
-    return { ok: false, error: message };
-  }
 }
 
 export const observationsRouter = createRouter({
@@ -768,7 +727,11 @@ export const observationsRouter = createRouter({
         timestamp: new Date(),
       });
 
-      return { success: true, recomputed: recompute.ok, recomputeError: recompute.error };
+      return {
+        success: true,
+        recomputed: recompute.ok,
+        recomputeError: recompute.ok ? undefined : recompute.error,
+      };
     }),
 
   /**

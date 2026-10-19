@@ -144,6 +144,32 @@ export default function ImportJobDetailPage({
     },
   });
 
+  // spec 21 §4.6 / S3：打开任务时的懒重算。
+  // 门禁结论与空区间都是入库那一刻的快照，字典/学习行修好后旧行不会自己变；不重算就会
+  // 永久堆积幽灵待办（实测 5 条历史留痕全是这种）。只在「区间为空且机器还没背书过」的
+  // 行存在时触发，且每个任务本会话只触发一次；失败静默（worker 可能没启动），不阻断渲染。
+  const recomputeRangesMutation = trpc.importJobs.recomputeRanges.useMutation({
+    onSuccess: (result) => {
+      if (result.changed > 0) utils.importJobs.getDetail.invalidate({ id });
+    },
+  });
+  const recomputedJobRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!data || recomputedJobRef.current === id) return;
+    // 还在解析的单子：观测可能还没落全，重算没有意义，等完成后再来
+    if (["pending", "classifying", "parsing", "normalizing"].includes(data.job.status)) return;
+    const needsRecompute = data.observations.some(
+      (o) =>
+        (o.status === "range_pending" || o.status === "extracted") &&
+        o.referenceRangeLow == null &&
+        o.referenceRangeHigh == null,
+    );
+    if (!needsRecompute) return;
+    recomputedJobRef.current = id;
+    recomputeRangesMutation.mutate({ id });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, id]);
+
   const grouped = useMemo(() => {
     if (!detailObservations)
       return new Map<string, NonNullable<typeof detailObservations>>();

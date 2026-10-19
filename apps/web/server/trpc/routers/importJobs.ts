@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { createRouter, protectedProcedure } from "../init";
 import {
   createImportJob,
@@ -24,6 +24,7 @@ import {
 } from "@openvitals/database";
 import { getActiveProfileId } from "../active-profile";
 import { ensureFollowUpReminder } from "../../data/follow-up";
+import { requestRangeRecompute } from "../../lib/worker-client";
 
 type WorkerTriggerParams = {
   importJobId: string;
@@ -296,6 +297,59 @@ export const importJobsRouter = createRouter({
         userId: ctx.userId,
       });
       return { job, observations, artifact };
+    }),
+
+  // 打开任务详情时的懒重算（spec 21 §4.6 / S3）。
+  //
+  // 为什么需要它：gateReason 与空区间都是**入库那一刻的快照**。字典修好了、学习行补上了，
+  // 库里那串空区间不会自己变——不重算就会永久堆积幽灵待办（实测 5 条历史留痕全是这种）。
+  //
+  // 只挑「机器还没被背书过（extracted / range_pending）且区间为空」的行：已有区间的行
+  // 可能来自报告原文，重算会把它覆盖成字典区间，那是数据损失。这里先查一遍是为了
+  // 「没事可做就不打 worker」——否则每开一次页面就发一次空请求。
+  recomputeRanges: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const job = await getImportJobStatus(ctx.db, {
+        id: input.id,
+        userId: ctx.userId,
+      });
+      if (!job) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Import job not found",
+        });
+      }
+
+      const candidates = await ctx.db
+        .select({ id: observations.id })
+        .from(observations)
+        .where(
+          and(
+            eq(observations.importJobId, input.id),
+            eq(observations.userId, ctx.userId),
+            inArray(observations.status, ["extracted", "range_pending"]),
+            isNull(observations.referenceRangeLow),
+            isNull(observations.referenceRangeHigh),
+          ),
+        )
+        .limit(1);
+
+      if (candidates.length === 0) {
+        return { triggered: false, changed: 0, error: null as string | null };
+      }
+
+      const outcome = await requestRangeRecompute({
+        userId: ctx.userId,
+        importJobId: input.id,
+      });
+      if (!outcome.ok) {
+        // 失败不抛错：懒重算是自愈，不是渲染前提。worker 未启动时页面照常可用，
+        // 行留在 range_pending，下次打开再试。
+        console.warn(`[importJobs] lazy range recompute skipped: ${outcome.error}`);
+        return { triggered: true, changed: 0, error: outcome.error };
+      }
+      return { triggered: true, changed: outcome.result.changed, error: null as string | null };
     }),
 
   // 按本次导入（importJob）批量修正检查日期，并清除「日期未知」占位标记

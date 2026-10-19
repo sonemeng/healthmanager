@@ -50,6 +50,8 @@ export interface RecomputeResult {
   missingMetric: number;
   /** 本次由 range_pending 转为 extracted 的行数 */
   released: number;
+  /** 实际写回库的行数（含「只清掉幽灵 gateReason」这种没有区间变化的行） */
+  changed: number;
 }
 
 export async function recomputeObservationRanges(
@@ -98,6 +100,7 @@ export async function recomputeObservationRanges(
     exempted: 0,
     missingMetric: 0,
     released: 0,
+    changed: 0,
   };
 
   for (const row of rows) {
@@ -189,6 +192,7 @@ export async function recomputeObservationRanges(
         updatedAt: new Date(),
       })
       .where(and(eq(observations.id, row.id), eq(observations.userId, userId)));
+    result.changed += 1;
   }
 
   // 重算可能让待办归零 → 任务该转 completed（与 confirm 的收尾同一条判定）
