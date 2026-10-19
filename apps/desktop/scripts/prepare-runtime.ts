@@ -213,6 +213,11 @@ async function collapseStagedDuplicates(appRoot: string) {
 }
 
 async function main() {
+  // spec 21 · S0a：指标字典校验门禁。
+  // ERROR > 0 直接中断打包——字典是判读的唯一依据，带病产物比打包失败更贵。
+  // 需要本地内嵌库在跑（43002）；可用 DATABASE_URL 指向别处。
+  run('pnpm', ['--filter', '@openvitals/database', 'audit:metrics']);
+
   await rm(staging, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
 
