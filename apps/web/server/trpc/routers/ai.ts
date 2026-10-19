@@ -193,7 +193,7 @@ export const aiRouter = createRouter({
         .from(observations)
         // spec 21 §4.3 原则 3：range_pending 只是「区间待定」，测量值本身有效，
         // 必须继续进入 AI 分析（与趋势/对比同口径）；flagged（未匹配）才排除。
-        .where(and(eq(observations.userId, ctx.userId), ...(profileId ? [eq(observations.profileId, profileId)] : []), inArray(observations.status, ['extracted', 'confirmed', 'corrected', 'range_pending'])))
+        .where(and(eq(observations.userId, ctx.userId), ...(profileId ? [eq(observations.profileId, profileId)] : []), inArray(observations.status, ['extracted', 'confirmed', 'corrected', 'auto_verified', 'range_pending'])))
         .orderBy(observations.observedAt);
 
       if (rows.length === 0) {

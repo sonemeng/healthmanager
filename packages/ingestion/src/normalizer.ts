@@ -1,7 +1,13 @@
-import type { RawExtraction, NormalizedObservation, FlaggedExtraction, NormalizationResult } from './types';
+import type { RawExtraction, NormalizedObservation, FlaggedExtraction, NormalizationResult, UnitConversionMeta } from './types';
 import { CONFIDENCE_THRESHOLD } from '@openvitals/common';
-import { checkUnitConsistency, checkMagnitudeBand, canonicalUnit } from './units';
-import type { GateCode } from './units';
+import {
+  checkUnitConsistency,
+  checkMagnitudeBand,
+  canonicalUnit,
+  findConversionRule,
+  applyConversion,
+} from './units';
+import type { GateCode, UnitConversionRule } from './units';
 
 export interface DemographicRange {
   sex: string | null;
@@ -78,13 +84,8 @@ function divergesMoreThan20Pct(a: { low: number | null; high: number | null }, b
   return oneSide(a.low, b.low) || oneSide(a.high, b.high);
 }
 
-export interface UnitConversion {
-  fromUnit: string;
-  toUnit: string;
-  metricCode: string | null;
-  multiplier: number;
-  offset: number;
-}
+/** 换算规则（同 `UnitConversionRule`，保留旧名以免改动调用方） */
+export type UnitConversion = UnitConversionRule;
 
 /**
  * 匹配用清洗：去中英文括号及内容、空白、星号、间隔号、连字符，转小写。
@@ -516,6 +517,70 @@ export function resolveReferenceRange(
   };
 }
 
+/**
+ * 换算计划（spec 21 §4.9 / D6）：把一条抽取项换算到**字典单位**。
+ *
+ * 触发条件（全部满足，缺一不换）：
+ *  - 有数值（定性/半定量没有可换算的量）
+ *  - 观测单位 ≠ 字典单位（先过 canonicalUnit，避免 `umol/L` vs `µmol/L` 误判）
+ *  - `unit_conversions` 白名单里有对应 pair —— `/HPF ↔ /μL ↔ /LPF` 永远不在表里，
+ *    所以这类量永远不换算，继续走第二道闸 + 人工（§4.9 边界 1）
+ *  - 指标不是 qualitative / dimensionless
+ *
+ * **值、区间、单位三者原子换算**：历史事故是「值换了、区间照抄原文」，只换一半必然错位；
+ * 三者同换后「值是否在区间内」是线性不变量，判读结论不变。
+ * `referenceRangeText` 保留纸质单原文，不改写（角标悬浮会给原文数值）。
+ */
+function planUnitConversion(
+  extraction: RawExtraction,
+  metric: MetricDefinition,
+  rules: UnitConversion[],
+): { patched: RawExtraction; meta: UnitConversionMeta } | null {
+  if (extraction.value === null) return null;
+  if (metric.unitKind === 'qualitative' || metric.unitKind === 'dimensionless') return null;
+
+  const from = canonicalUnit(extraction.unit);
+  const to = canonicalUnit(metric.unit);
+  if (!from || !to || from === to) return null;
+
+  const found = findConversionRule(rules, { fromUnit: from, toUnit: to, metricCode: metric.id });
+  if (!found) return null;
+
+  const convert = (v: number) => applyConversion(v, found);
+  const rawLow = extraction.referenceRangeLow;
+  const rawHigh = extraction.referenceRangeHigh;
+  let low = rawLow !== null ? convert(rawLow) : null;
+  let high = rawHigh !== null ? convert(rawHigh) : null;
+  // 负系数（全局规则里的 体温 F→C）会让区间上下界翻转；值本身不需要交换
+  if (low !== null && high !== null && low > high) {
+    const swapped = low;
+    low = high;
+    high = swapped;
+  }
+
+  // 留痕记录**实际生效**的变换（逆向时为 1/m 与 -o/m），界面要按它显示「×0.01131」
+  const multiplier = found.reversed ? 1 / found.rule.multiplier : found.rule.multiplier;
+  const offset = found.reversed ? -found.rule.offset / found.rule.multiplier : found.rule.offset;
+
+  return {
+    patched: {
+      ...extraction,
+      value: convert(extraction.value),
+      unit: to,
+      referenceRangeLow: low,
+      referenceRangeHigh: high,
+    },
+    meta: {
+      fromUnit: from,
+      toUnit: to,
+      multiplier,
+      offset,
+      rawValue: extraction.value,
+      rawRange: rawLow !== null || rawHigh !== null ? { low: rawLow, high: rawHigh } : null,
+    },
+  };
+}
+
 export function normalizeExtractions(
   extractions: RawExtraction[],
   metricDefinitions: MetricDefinition[],
@@ -538,16 +603,19 @@ export function normalizeExtractions(
       continue;
     }
 
-    // 化验单原文优先：报告单写的数值与单位照抄，不做强制单位换算。
-    // 强制换算会造成两类错误：
-    // 1) 换算系数按血清指标制定，尿肌酐等体液浓度套用后数值失真（如尿肌酐 2831 umol/L → 32 mg/dL）
-    // 2) 值被换算而参考区间照抄原文，单位错位导致异常判断不可靠
-    // 指标字典单位仅作为报告单缺单位时的显示兜底。
-    let finalValue = extraction.value;
-    let finalUnit = extraction.unit ?? metric.unit ?? '';
+    // 换算（spec 21 §4.9 / D6，2026-10-19 起）：只对 `unit_conversions` 白名单里的
+    // 「同一物理量不同计量单位」换算，且**值/区间/单位三者原子同换**。
+    // 历史事故（值换了、区间照抄原文）正是不换区间造成的；三者同步后判读是线性不变量。
+    // `/HPF ↔ /μL` 这类计数基准差异永远不在白名单里，继续走第二道闸 + 人工。
+    // 报告单缺单位时不换算（无法确定原始单位），字典单位仅作显示兜底。
+    const planned = planUnitConversion(extraction, metric, unitConversions);
+    const effective = planned?.patched ?? extraction;
+
+    let finalValue = effective.value;
+    let finalUnit = effective.unit ?? metric.unit ?? '';
 
     // Determine abnormality using demographic-aware ranges
-    const range = resolveReferenceRange(extraction, metric, demographics);
+    const range = resolveReferenceRange(effective, metric, demographics);
     const { low: refLow, high: refHigh } = range;
     // 门禁拦下时 refLow/refHigh 为 null → isAbnormal 退回报告自身的 ↑/↓ 标记或 null
     // （宁可「未知方向」，也不给出由错位区间算出的错误方向）
@@ -594,6 +662,8 @@ export function normalizeExtractions(
       gateReason: range.gateReason,
       // 结构化门禁码（spec 21 §4.2）：materialize 据此决定 status
       gateCode: range.gateCode,
+      // 换算留痕（spec 21 §4.9）：有换算才有值，界面据此显示角标
+      conversion: planned?.meta,
     };
 
     if (baseConfidence < CONFIDENCE_THRESHOLD) {

@@ -16,6 +16,8 @@ import {
   formatRange,
 } from "@/lib/health-utils";
 import { cn, formatDate, formatObsValue, isDurationMetric } from "@/lib/utils";
+import { ConversionDot } from "@/components/health/conversion-dot";
+import { readConversion } from "@/lib/conversion";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { Pill, TrendingUp, TrendingDown, Minus } from "lucide-react";
 
@@ -148,11 +150,12 @@ export default function LabDetailPage({
         width: "0.8fr",
         cell: (obs) => {
           const obsStatus = deriveStatus(obs);
+          const conversion = readConversion(obs.metadataJson);
           return (
             <div className="flex items-baseline gap-1.5">
               <span
                 className={cn(
-                  "text-[15px] font-semibold tracking-[-0.01em] font-mono tabular-nums",
+                  "relative text-[15px] font-semibold tracking-[-0.01em] font-mono tabular-nums",
                   obs.isAbnormal
                     ? obsStatus === "critical"
                       ? "text-health-critical"
@@ -165,7 +168,9 @@ export default function LabDetailPage({
                   obs.valueNumeric,
                   obs.valueText,
                   displayPrecision,
+                  { converted: !!conversion },
                 )}
+                <ConversionDot conversion={conversion} />
               </span>
               {!isDurationMetric(metricCode) && obs.unit && (
                 <span className="text-[11px] text-neutral-400 font-mono">
@@ -186,6 +191,7 @@ export default function LabDetailPage({
               obs.referenceRangeLow,
               obs.referenceRangeHigh,
               obs.unit,
+              { converted: !!readConversion(obs.metadataJson) },
             )}
           </div>
         ),
@@ -216,7 +222,9 @@ export default function LabDetailPage({
               ? "已修正"
               : obs.status === "confirmed"
                 ? "已确认"
-                : "待确认"}
+                : obs.status === "auto_verified"
+                  ? "自动通过"
+                  : "待确认"}
           </div>
         ),
       },
@@ -328,6 +336,7 @@ export default function LabDetailPage({
                   latest.valueNumeric,
                   latest.valueText,
                   displayPrecision,
+                  { converted: !!readConversion(latest.metadataJson) },
                 )}{" "}
                 {isDurationMetric(metricCode) ? "" : (latest.unit ?? "")}
               </span>
@@ -345,6 +354,7 @@ export default function LabDetailPage({
             latest?.valueNumeric,
             latest?.valueText,
             displayPrecision,
+            { converted: !!readConversion(latest?.metadataJson) },
           )}
           subtext={
             isDurationMetric(metricCode)

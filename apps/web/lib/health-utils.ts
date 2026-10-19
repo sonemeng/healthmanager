@@ -1,4 +1,5 @@
 import type { HealthStatus } from "@/components/health/status-badge";
+import { formatConvertedNumber } from "./utils";
 
 export function deriveStatus(obs: {
   isAbnormal?: boolean | null;
@@ -106,11 +107,15 @@ export function formatRange(
   low: number | null | undefined,
   high: number | null | undefined,
   unit?: string | null,
+  options?: { converted?: boolean },
 ): string {
   const u = unit ?? "";
+  // 换算后的区间与值必须用同一套精度规则，否则会出现「0.019 落在 0.0186~0.0245 里却像贴在边界外」
+  // 的观感问题（spec 21 §4.11 第 4 条）
+  const fmt = (v: number) => (options?.converted ? formatConvertedNumber(v) : String(v));
   // 中文语境用「~」连接区间（en-dash 在部分中文字体下显示异常，用户实测观感如乱码）
-  if (low != null && high != null) return `${low}~${high} ${u}`.trim();
-  if (low != null) return `> ${low} ${u}`.trim();
-  if (high != null) return `< ${high} ${u}`.trim();
+  if (low != null && high != null) return `${fmt(low)}~${fmt(high)} ${u}`.trim();
+  if (low != null) return `> ${fmt(low)} ${u}`.trim();
+  if (high != null) return `< ${fmt(high)} ${u}`.trim();
   return "—";
 }

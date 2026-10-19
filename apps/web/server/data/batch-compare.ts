@@ -129,12 +129,13 @@ export function dayKeyOf(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-// 同指标同天多条 → confirmed/corrected 优先于 extracted，同级取 updatedAt 最新的一条
+// 同指标同天多条 → confirmed/corrected/auto_verified 优先于 extracted，同级取 updatedAt 最新的一条。
+// auto_verified 与 confirmed 同权（spec 21 §4.10 / D7）：值本身没被人改过，只是省掉了逐行背书。
 export function groupRowsByDay(
   rows: BatchRow[],
 ): Map<string, Map<string, BatchRow>> {
   const statusRank = (s: string) =>
-    s === 'confirmed' || s === 'corrected' ? 2 : 1;
+    s === 'confirmed' || s === 'corrected' || s === 'auto_verified' ? 2 : 1;
 
   const days = new Map<string, Map<string, BatchRow>>();
   for (const row of rows) {

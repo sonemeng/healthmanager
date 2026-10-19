@@ -100,16 +100,40 @@ export function formatDuration(minutes: number): string {
 
 const DURATION_METRICS = new Set(['sleep_duration']);
 
+/**
+ * 换算值的显示（spec 21 §4.11 / D8）。
+ *
+ * 为什么不用「固定两位小数」：1.65 mg/dL 乘 0.01131 = 0.01866，固定两位 → 0.02，
+ * 误差 +7.2%，对低值指标足以跨过参考下限。规则改成按**有效数字**：
+ *  - |v| < 1 → 两位有效数字（0.01866 → 0.019，误差 1.8%）
+ *  - |v| ≥ 1 → 四位有效数字（145.86 → 145.9；5922.2 → 5922）
+ * 存储层不 round（real 的 7 位有效数字够用，提前 round 会让 backfill 不可逆）。
+ */
+export function formatConvertedNumber(value: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  if (value === 0) return '0';
+  const abs = Math.abs(value);
+  const digits = abs < 1 ? 2 : 4;
+  const fixed = value.toPrecision(digits);
+  const numeric = Number(fixed);
+  // 极大/极小值保留 toPrecision 的写法：Number() 会转成科学计数法，反而更难读
+  if (numeric !== 0 && (Math.abs(numeric) >= 1e21 || Math.abs(numeric) < 1e-6)) return fixed;
+  return String(numeric);
+}
+
 export function formatObsValue(
   metricCode: string,
   valueNumeric: number | null | undefined,
   valueText: string | null | undefined,
   displayPrecision?: number | null,
+  options?: { converted?: boolean },
 ): string {
   if (valueNumeric != null && DURATION_METRICS.has(metricCode)) {
     return formatDuration(valueNumeric);
   }
   if (valueNumeric != null) {
+    // 换算值：走有效数字规则（与值的来源无关，只看是否来自换算）
+    if (options?.converted) return formatConvertedNumber(valueNumeric);
     // 化验单原文优先：保留原始值的有效小数位，不用字典精度截断（1.27 不显示为 1.3）
     const raw = String(valueNumeric);
     const decLen = raw.includes('.') ? raw.length - raw.indexOf('.') - 1 : 0;

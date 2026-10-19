@@ -7,6 +7,8 @@ import {
   StatusBadge,
   type HealthStatus,
 } from "@/components/health/status-badge";
+import { ConversionDot } from "@/components/health/conversion-dot";
+import { readConversion } from "@/lib/conversion";
 import { deriveStatus, deriveDirection, getAbnormalityLabel, formatRange } from "@/lib/health-utils";
 import { cn, formatDate, formatObsValue } from "@/lib/utils";
 import { DOC_TYPE_LABELS, IMPORT_JOB_STATUS_MAP } from "@/lib/constants";
@@ -196,8 +198,13 @@ export default function ImportJobDetailPage({
       };
     const total = detailObservations.length;
     const abnormal = detailObservations.filter((o) => o.isAbnormal).length;
+    // auto_verified 与 confirmed 同属「已处理」（spec 21 §4.10 / D7），只是前者是机器放行；
+    // 统计口径必须一致，否则页头进度条会让一份全自动通过的报告看起来「一行都没确认」
     const confirmed = detailObservations.filter(
-      (o) => o.status === "confirmed" || o.status === "corrected",
+      (o) =>
+        o.status === "confirmed" ||
+        o.status === "corrected" ||
+        o.status === "auto_verified",
     ).length;
     const fallbackDates = detailObservations.filter(
       (o) => o.observedAtIsFallback,
@@ -985,14 +992,19 @@ function CategoryGroup({
         {/* Rows */}
         {observations.map((obs) => {
           const healthStatus = deriveStatus(obs);
+          const isAutoVerified = obs.status === "auto_verified";
           const isConfirmed =
-            obs.status === "confirmed" || obs.status === "corrected";
+            obs.status === "confirmed" ||
+            obs.status === "corrected" ||
+            isAutoVerified;
           const isPending = obs.status === "extracted";
           const isFlagged = obs.status === "flagged";
           const isRangePending = obs.status === "range_pending";
           const isEditing = editingId === obs.id;
           const isRangeEditing = rangeEditingId === obs.id;
           const gate = readGate(obs.metadataJson);
+          // 换算留痕（spec 21 §4.9）：值/区间已换算到字典单位，角标提示原文
+          const conversion = readConversion(obs.metadataJson);
 
           // 显示优先级：识别原文 > 未识别项目 > 字典中文名
           const displayName = obs.originalValueText?.trim()
@@ -1042,7 +1054,7 @@ function CategoryGroup({
                 <div className="flex items-baseline gap-1.5">
                   <span
                     className={cn(
-                      "text-[15px] font-semibold tracking-[-0.01em] font-mono tabular-nums",
+                      "relative text-[15px] font-semibold tracking-[-0.01em] font-mono tabular-nums",
                       obs.isAbnormal
                         ? healthStatus === "critical"
                           ? "text-[var(--color-health-critical)]"
@@ -1050,7 +1062,8 @@ function CategoryGroup({
                         : "text-neutral-900",
                     )}
                   >
-                    {formatObsValue(obs.metricCode, obs.valueNumeric, obs.valueText, precisionMap.get(obs.metricCode))}
+                    {formatObsValue(obs.metricCode, obs.valueNumeric, obs.valueText, precisionMap.get(obs.metricCode), { converted: !!conversion })}
+                    <ConversionDot conversion={conversion} />
                   </span>
                   {obs.unit && (
                     <span className="text-[11px] text-neutral-400 font-mono">
@@ -1065,6 +1078,7 @@ function CategoryGroup({
                     obs.referenceRangeLow,
                     obs.referenceRangeHigh,
                     obs.unit,
+                    { converted: !!conversion },
                   )}
                   {isRangePending && (
                     <span
@@ -1090,9 +1104,25 @@ function CategoryGroup({
                 <div className="flex items-center justify-end gap-1.5">
                   {isConfirmed ? (
                     <>
-                      <span className="flex items-center gap-1 text-[11px] text-[var(--color-health-normal)] font-mono">
+                      <span
+                        className={cn(
+                          "flex items-center gap-1 text-[11px] font-mono",
+                          isAutoVerified
+                            ? "text-neutral-500"
+                            : "text-[var(--color-health-normal)]",
+                        )}
+                        title={
+                          isAutoVerified
+                            ? "解析达标且无门禁留痕，机器自动通过（不写学习行）"
+                            : undefined
+                        }
+                      >
                         <Check className="h-3 w-3" />
-                        {obs.status === "corrected" ? "已修正" : "已确认"}
+                        {obs.status === "corrected"
+                          ? "已修正"
+                          : isAutoVerified
+                            ? "自动通过"
+                            : "已确认"}
                       </span>
                       <button
                         onClick={() => startEditing(obs)}

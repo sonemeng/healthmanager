@@ -4,8 +4,10 @@
  * 纯函数、无副作用，供 packages/ingestion（normalizer）与 services/ingestion-worker 共用。
  *
  * 设计边界（务必先读）：
- *  1. 本模块只做「写法归一」与「精确进制记号等价」（K/µL≡10^9/L、M/µL≡10^12/L，数值不变），
- *     **不做任何物理量换算**（不把 mg/dL 的数字改成 mmol/L）——沿用项目「不做强制单位换算」原则。
+ *  1. 本模块的「归一」只做写法归一与精确进制记号等价（K/µL≡10^9/L、M/µL≡10^12/L，数值不变）。
+ *     物理量换算（mg/dL ↔ mmol/L）**只走 §4.9 的白名单**（`findConversionRule`，来源
+ *     `unit_conversions` 表），由调用方显式触发，且必须值/区间/单位三者原子换算；
+ *     不在白名单的 pair（尤其 /HPF ↔ /μL 这类计数基准差异）永不换算。
  *  2. 门禁只作用于 fallback（字典/人口学区间）；报告原文区间（优先级 1）永不介入。
  *  3. mEq/L 不参与全局归一：Na/K/Cl/Mg 为单价离子数值≡mmol/L，但 Ca 为二价（1 mmol/L = 2 mEq/L），
  *     一律改写会引入 2 倍误差，故保持原样、不做等价。
@@ -218,4 +220,75 @@ export function checkMagnitudeBand(
     };
   }
   return { ok: true };
+}
+
+// ── 单位换算（spec 21 §4.9 / D6）─────────────────────────────────────────────
+
+/**
+ * 换算规则（与 `unit_conversions` 表同形）。由调用方从库里装载后传进来——
+ * 本包保持纯函数，不碰数据库。
+ */
+export interface UnitConversionRule {
+  fromUnit: string;
+  toUnit: string;
+  /** 非 NULL = 只对该指标生效（如 creatinine 的 88.4）；NULL = 全局规则 */
+  metricCode: string | null;
+  multiplier: number;
+  offset: number;
+}
+
+export interface FoundConversion {
+  rule: UnitConversionRule;
+  /** 命中的是规则的逆向（y = x*m+o 反解 x） */
+  reversed: boolean;
+}
+
+/**
+ * 查可用换算规则（spec 21 §4.9）。
+ *
+ * **只认 `unit_conversions` 白名单**——这是「同一物理量的不同计量单位」的唯一事实来源。
+ * `/HPF ↔ /μL ↔ /LPF` 永远不在表里，因为那是计数基准/方法学差异（高倍视野面积随显微镜
+ * 与放大倍数变化，没有固定体积可乘除），硬换算就是编数据；它们必须继续走第二道闸 + 人工。
+ *
+ * 单位两侧先过 `canonicalUnit`：库里 `umol/L` / `μmol/L` / `µmol/L` 混写（实测 21 条规则里
+ * creatinine、uric_acid 就各有一对写法不同的同义行），不归一会漏配或重配。
+ */
+export function findConversionRule(
+  rules: UnitConversionRule[],
+  params: { fromUnit: string | null | undefined; toUnit: string | null | undefined; metricCode?: string },
+): FoundConversion | null {
+  const from = canonicalUnit(params.fromUnit);
+  const to = canonicalUnit(params.toUnit);
+  if (!from || !to || from === to) return null;
+
+  const isPair = (r: UnitConversionRule, a: string, b: string) =>
+    canonicalUnit(r.fromUnit) === a && canonicalUnit(r.toUnit) === b;
+
+  const pick = (list: UnitConversionRule[]): UnitConversionRule | null =>
+    (params.metricCode ? list.find((r) => r.metricCode === params.metricCode) : undefined) ??
+    list.find((r) => r.metricCode === null) ??
+    null;
+
+  const forward = pick(rules.filter((r) => isPair(r, from, to)));
+  if (forward) return { rule: forward, reversed: false };
+
+  const backward = pick(rules.filter((r) => isPair(r, to, from)));
+  if (backward) return { rule: backward, reversed: true };
+
+  return null;
+}
+
+/**
+ * 应用换算：y = x*m + o；逆向时 x = (y-o)/m。
+ *
+ * 负系数（体温 F→C）会让区间上下界翻转，**交换逻辑在调用方**（值本身不需要交换），
+ * 这样本函数保持无分支的纯数值语义，便于单测钉住。
+ */
+export function applyConversion(value: number, found: FoundConversion): number {
+  const { multiplier, offset } = found.rule;
+  if (found.reversed) {
+    if (multiplier === 0) return value;
+    return (value - offset) / multiplier;
+  }
+  return value * multiplier + offset;
 }

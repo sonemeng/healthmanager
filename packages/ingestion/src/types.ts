@@ -1,6 +1,21 @@
 import type { DataCategory, DocumentType } from '@openvitals/common';
 import type { GateCode } from './units';
 
+/**
+ * 单位换算留痕（spec 21 §4.9 / D6）。
+ *
+ * `rawValue` / `rawRange` 是**报告原文**，用于界面角标悬浮「原文 1.65 mg/dL（×88.4）」
+ * 与事后审计。注意不能再写 observations.original_* —— 那三列已被挪用来存原文项目名。
+ */
+export interface UnitConversionMeta {
+  fromUnit: string;
+  toUnit: string;
+  multiplier: number;
+  offset: number;
+  rawValue: number;
+  rawRange: { low: number | null; high: number | null } | null;
+}
+
 export interface RawExtraction {
   analyte: string;
   value: number | null;
@@ -63,6 +78,12 @@ export interface NormalizedObservation {
    * 定性/无量纲/报告自带区间的行不会有值（未做门禁判定）。
    */
   gateCode?: GateCode;
+  /**
+   * 单位换算留痕（spec 21 §4.9 / D6）：值、区间、单位已原子换算到字典单位。
+   * 落 observations.metadata_json.conversion；界面据此显示「已换算」角标与原文。
+   * 无换算的行不带此字段。
+   */
+  conversion?: UnitConversionMeta;
 }
 
 export interface FlaggedExtraction {
