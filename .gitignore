@@ -46,3 +46,6 @@ apps/desktop/dist/
 apps/desktop/build/
 apps/desktop/release/
 apps/desktop/release-personal/
+# 历史打包目录（release-0112-clean / release-clean-019b / release-0127-clean…）。
+# 0.1.27 之前只忽略了 release/ 本体，于是 34 个旧产物壳常年挂在 git status 里。
+apps/desktop/release-*/
