@@ -225,6 +225,15 @@ async function main() {
   // 而不是源码目录里的副本（门禁验 A、发货发 B 是 07 号坑 20 的病根）。
   await copyRequired(join(root, 'packages', 'database', 'drizzle'), join(staging, 'app', 'migrations'));
 
+  // PostgreSQL 运行时也要在门禁**之前**就位：门禁要起一个独立 scratch 集群（initdb/pg_ctl），
+  // 而 `rm(staging)` 刚把上一份删掉了。放在末尾会让门禁必然报「缺少 initdb.exe」——
+  // 0.1.27 首次全流程打包实测踩到。
+  // Keep only the PostgreSQL server runtime. Never package the build machine's
+  // data cluster, pgAdmin profile, installer, documentation, or credentials.
+  for (const directory of ['bin', 'lib', 'share']) {
+    await copyRequired(join(postgresSource, directory), join(staging, 'postgres', directory));
+  }
+
   run('pnpm', ['--filter', '@openvitals/web', 'build']);
   run('pnpm', ['--filter', '@openvitals/ingestion-worker', 'build']);
   // tsup 不是根 devDependency，只在各包自己的 node_modules 里装过（实测根目录
@@ -267,12 +276,6 @@ async function main() {
   console.log(
     `[prepare-runtime] collapsed ${collapsed.removed} redundant package copies (${formatMegabytes(collapsed.bytes)})`,
   );
-
-  // Keep only the PostgreSQL server runtime. Never package the build machine's
-  // data cluster, pgAdmin profile, installer, documentation, or credentials.
-  for (const directory of ['bin', 'lib', 'share']) {
-    await copyRequired(join(postgresSource, directory), join(staging, 'postgres', directory));
-  }
 }
 
 void main();
